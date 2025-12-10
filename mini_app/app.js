@@ -1215,50 +1215,91 @@ async function loadStickerForElement(element, stickerName) {
     
     // Если локальный файл не найден, пробуем через API
     try {
-        const response = await fetch(`${API_BASE}/sticker/${stickerName}`);
+        const initData = getInitData();
+        const response = await fetch(`${API_BASE}/sticker/${stickerName}`, {
+            headers: {
+                'X-Telegram-Init-Data': initData
+            }
+        });
+        
         if (response.ok) {
             const data = await response.json();
+            console.log(`📦 Данные стикера ${stickerName} из API:`, data);
+            
             const stickerUrl = data.file_url || data.file_id;
             if (stickerUrl) {
-                // Проверяем формат файла
-                const isTgs = stickerUrl.toLowerCase().endsWith('.tgs') || 
-                             stickerUrl.includes('.tgs') ||
-                             data.is_tgs;
-                if (isTgs && window.lottie && window.pako) {
+                console.log(`✅ URL стикера ${stickerName}:`, stickerUrl);
+                
+                // Проверяем формат файла по URL и данным
+                const urlLower = stickerUrl.toLowerCase();
+                const isTgs = urlLower.endsWith('.tgs') || 
+                             urlLower.includes('.tgs') ||
+                             data.is_tgs === true;
+                
+                console.log(`🔍 Формат стикера ${stickerName}: ${isTgs ? 'TGS' : 'Image'}`);
+                
+                if (isTgs) {
                     // Для TGS файлов используем loadTgsSticker
-                    await loadTgsSticker(element, stickerUrl);
-                } else if (isTgs) {
-                    // Ждем загрузки библиотек
-                    const checkLibs = setInterval(() => {
-                        if (window.lottie && window.pako) {
+                    if (window.lottie && window.pako) {
+                        await loadTgsSticker(element, stickerUrl);
+                    } else {
+                        // Ждем загрузки библиотек
+                        console.log('⏳ Ожидание загрузки библиотек для TGS...');
+                        const checkLibs = setInterval(() => {
+                            if (window.lottie && window.pako) {
+                                clearInterval(checkLibs);
+                                loadTgsSticker(element, stickerUrl);
+                            }
+                        }, 100);
+                        setTimeout(() => {
                             clearInterval(checkLibs);
-                            loadTgsSticker(element, stickerUrl);
-                        }
-                    }, 100);
-                    setTimeout(() => clearInterval(checkLibs), 5000);
+                            if (!window.lottie || !window.pako) {
+                                console.error('❌ Библиотеки не загрузились для TGS стикера');
+                                // Fallback на изображение, если библиотеки не загрузились
+                                const img = document.createElement('img');
+                                img.src = stickerUrl;
+                                img.alt = 'Sticker';
+                                img.style.width = stickerSize;
+                                img.style.height = stickerSize;
+                                img.style.objectFit = 'contain';
+                                element.innerHTML = '';
+                                element.appendChild(img);
+                            }
+                        }, 5000);
+                    }
                 } else {
+                    // Для обычных изображений (PNG, WEBP, GIF и т.д.)
+                    console.log(`🖼️ Загрузка изображения стикера: ${stickerUrl}`);
                     const img = document.createElement('img');
                     img.src = stickerUrl;
                     img.alt = 'Sticker';
                     img.style.width = stickerSize;
                     img.style.height = stickerSize;
                     img.style.objectFit = 'contain';
-                    img.onerror = () => {
-                        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
+                    img.style.display = 'block';
+                    img.onload = () => {
+                        console.log(`✅ Изображение стикера ${stickerName} загружено`);
+                    };
+                    img.onerror = (e) => {
+                        console.error(`❌ Ошибка загрузки изображения стикера ${stickerName}:`, e);
+                        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️</div>`;
                     };
                     element.innerHTML = '';
                     element.appendChild(img);
                 }
             } else {
-                element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
+                console.warn(`⚠️ Стикер ${stickerName} найден, но URL отсутствует`);
+                element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️</div>`;
             }
         } else {
+            const errorData = await response.json().catch(() => ({}));
+            console.warn(`⚠️ Стикер ${stickerName} не найден через API, статус:`, response.status, errorData);
             // Если стикер не найден, показываем fallback
-            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
+            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️</div>`;
         }
     } catch (error) {
-        console.error(`Ошибка загрузки стикера ${stickerName}:`, error);
-        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
+        console.error(`❌ Ошибка загрузки стикера ${stickerName}:`, error);
+        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️</div>`;
     }
 }
 
