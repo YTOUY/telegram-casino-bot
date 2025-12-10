@@ -422,6 +422,12 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
         except Exception as e:
             logger.error(f"❌ Ошибка при отправке сообщения с результатом: {e}", exc_info=True)
         
+        # Отправляем стикеры для каждого эмодзи результата в один ряд
+        try:
+            await send_result_stickers(bot, chat_id, game_type, throws, original_message_id)
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отправке стикеров результата: {e}", exc_info=True)
+        
         # Сохраняем последнюю игру перед очисткой состояния (сохраняем custom_multiplier для ракетки)
         last_game_data = {
             "game_type": game_type,
@@ -449,6 +455,94 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
         
     except Exception as e:
         logger.error(f"❌ Ошибка в process_game_result: {e}", exc_info=True)
+
+
+def get_sticker_name_for_result(game_type: str, result: int) -> str:
+    """Получить имя стикера для результата игры"""
+    # Для кубика - просто число
+    if game_type == "dice":
+        return f"dice_{result}"
+    
+    # Для боулинга - количество сбитых кеглей
+    if game_type == "bowling":
+        if result == 6:  # В боулинге 6 = страйк (все кегли)
+            return "bowling_strike"
+        elif result == 0 or result == 1:
+            return "bowling_miss"
+        else:
+            return f"bowling_{result}"
+    
+    # Для дартса - просто по значению dice (1-6)
+    if game_type == "dart":
+        return f"darts_{result}"
+    
+    # Для футбола - просто по значению dice (1-5)
+    if game_type == "football":
+        return f"football_{result}"
+    
+    # Для баскетбола - просто по значению dice (1-5)
+    if game_type == "basketball":
+        return f"basketball_{result}"
+    
+    # По умолчанию
+    return f"{game_type}_{result}"
+
+
+async def send_result_stickers(bot, chat_id: int, game_type: str, throws: list, original_message_id: int = None):
+    """Отправить стикеры для каждого эмодзи результата в один ряд"""
+    if not throws or len(throws) == 0:
+        logger.warning("⚠️ Нет результатов для отправки стикеров")
+        return
+    
+    try:
+        # Определяем, является ли чат группой
+        is_group = False
+        if original_message_id:
+            try:
+                chat = await bot.get_chat(chat_id)
+                is_group = chat.type in ['group', 'supergroup']
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось определить тип чата: {e}")
+        
+        # Получаем стикеры для каждого результата
+        stickers_to_send = []
+        for throw_result in throws:
+            sticker_name = get_sticker_name_for_result(game_type, throw_result)
+            sticker = await db.get_sticker(sticker_name)
+            if sticker:
+                stickers_to_send.append(sticker['file_id'])
+                logger.info(f"✅ Найден стикер для {sticker_name}: {sticker['file_id']}")
+            else:
+                logger.warning(f"⚠️ Стикер {sticker_name} не найден в базе данных")
+        
+        # Отправляем все стикеры быстро последовательно, чтобы они были в один ряд
+        if stickers_to_send:
+            logger.info(f"📤 Отправляю {len(stickers_to_send)} стикеров в один ряд")
+            for i, sticker_file_id in enumerate(stickers_to_send):
+                try:
+                    if is_group and original_message_id and i == 0:
+                        # Первый стикер в группе - отвечаем на исходное сообщение
+                        await bot.send_sticker(
+                            chat_id=chat_id,
+                            sticker=sticker_file_id,
+                            reply_to_message_id=original_message_id
+                        )
+                    else:
+                        # Остальные стикеры - отправляем без reply, чтобы они были рядом
+                        await bot.send_sticker(
+                            chat_id=chat_id,
+                            sticker=sticker_file_id
+                        )
+                    # Минимальная задержка между стикерами для отправки в один ряд
+                    if i < len(stickers_to_send) - 1:
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при отправке стикера {i+1}/{len(stickers_to_send)}: {e}")
+            logger.info(f"✅ Все стикеры отправлены успешно")
+        else:
+            logger.warning("⚠️ Нет стикеров для отправки")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в send_result_stickers: {e}", exc_info=True)
 
 
 async def process_dice_result_after_delay(bot, message_id: int, user_id: int, chat_id: int, 
