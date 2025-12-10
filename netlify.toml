@@ -2,6 +2,14 @@
   publish = "mini_app"
   command = "echo 'No build needed'"
 
+# Важно: функции должны обрабатываться ДО общего redirect
+[[redirects]]
+  from = "/.netlify/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+  force = true
+
+# Все остальные запросы перенаправляем на index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"
