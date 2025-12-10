@@ -1112,17 +1112,17 @@ function getLocalStickerPath(stickerName) {
         'darts_6': 'stickers/darts/6.tgs',
         'darts_base': 'stickers/darts/base.tgs',
         
-        // Боулинг
-        'bowling_0': 'stickers/bowling/0.tgs',
-        'bowling_1': 'stickers/bowling/1.tgs',
-        'bowling_2': 'stickers/bowling/2.tgs',
-        'bowling_3': 'stickers/bowling/3.tgs',
-        'bowling_4': 'stickers/bowling/4.tgs',
-        'bowling_5': 'stickers/bowling/5.tgs',
-        'bowling_6': 'stickers/bowling/6.tgs',
-        'bowling_strike': 'stickers/bowling/strike.tgs',
-        'bowling_miss': 'stickers/bowling/miss.tgs',
-        'bowling_base': 'stickers/bowling/base.tgs',
+        // Боулинг (GIF файлы)
+        'bowling_0': 'stickers/bowling/bowling_0_pin.gif',
+        'bowling_1': 'stickers/bowling/bowling_1_pins.gif',
+        'bowling_2': 'stickers/bowling/bowling_1_pins.gif', // Используем bowling_1_pins для значения 2
+        'bowling_3': 'stickers/bowling/bowling_3_pins.gif',
+        'bowling_4': 'stickers/bowling/bowling_4_pins.gif',
+        'bowling_5': 'stickers/bowling/bowling_5_pins.gif',
+        'bowling_6': 'stickers/bowling/bowling_6_pins.gif',
+        'bowling_strike': 'stickers/bowling/bowling_6_pins.gif', // Страйк = все кегли сбиты
+        'bowling_miss': 'stickers/bowling/bowling_0_pin.gif', // Промах = 0 кеглей
+        'bowling_base': 'stickers/bowling/bowling_animation.gif',
         
         // Футбол
         'football_1': 'stickers/football/1.tgs',
@@ -1169,25 +1169,43 @@ async function loadStickerForElement(element, stickerName) {
             const response = await fetch(localPath, { method: 'HEAD' });
             if (response.ok) {
                 console.log(`✅ Локальный стикер найден: ${localPath}`);
-                // Все стикеры в папке stickers - это TGS файлы
-                if (window.lottie && window.pako) {
-                    await loadTgsSticker(element, localPath);
+                // Проверяем формат файла (GIF или TGS)
+                const isGif = localPath.toLowerCase().endsWith('.gif');
+                if (isGif) {
+                    // Для GIF файлов создаем img элемент
+                    const img = document.createElement('img');
+                    img.src = localPath;
+                    img.alt = 'Sticker';
+                    img.style.width = stickerSize;
+                    img.style.height = stickerSize;
+                    img.style.objectFit = 'contain';
+                    img.onerror = () => {
+                        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
+                    };
+                    element.innerHTML = '';
+                    element.appendChild(img);
                     return;
                 } else {
-                    // Ждем загрузки библиотек
-                    const checkLibs = setInterval(() => {
-                        if (window.lottie && window.pako) {
+                    // Для TGS файлов используем loadTgsSticker
+                    if (window.lottie && window.pako) {
+                        await loadTgsSticker(element, localPath);
+                        return;
+                    } else {
+                        // Ждем загрузки библиотек
+                        const checkLibs = setInterval(() => {
+                            if (window.lottie && window.pako) {
+                                clearInterval(checkLibs);
+                                loadTgsSticker(element, localPath);
+                            }
+                        }, 100);
+                        setTimeout(() => {
                             clearInterval(checkLibs);
-                            loadTgsSticker(element, localPath);
-                        }
-                    }, 100);
-                    setTimeout(() => {
-                        clearInterval(checkLibs);
-                        if (!window.lottie || !window.pako) {
-                            console.error('❌ Библиотеки не загрузились');
-                        }
-                    }, 5000);
-                    return;
+                            if (!window.lottie || !window.pako) {
+                                console.error('❌ Библиотеки не загрузились');
+                            }
+                        }, 5000);
+                        return;
+                    }
                 }
             }
         } catch (e) {
