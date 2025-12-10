@@ -12,7 +12,9 @@ const appState = {
     stickers: {},
     checkStep: 1,
     currentGameId: null,
-    selectedGameMode: null
+    selectedGameMode: null,
+    selectedBet: 1.0,
+    gameInProgress: false  // Флаг активной игры для блокировки повторных запусков
 };
 
 // API endpoints
@@ -950,6 +952,12 @@ function initStartStep(gameId) {
         
         // Добавляем обработчик запуска игры
         newStartBtn.addEventListener('click', async () => {
+            // Проверяем, не идет ли уже игра
+            if (appState.gameInProgress) {
+                showToast('Игра уже запущена! Дождитесь завершения текущей игры.');
+                return;
+            }
+            
             if (!appState.selectedGameMode) {
                 showToast('Выберите режим игры');
                 return;
@@ -973,8 +981,23 @@ function initStartStep(gameId) {
                 return;
             }
             
-            // Запускаем игру
-            await launchGame(gameId, bet, appState.selectedGameMode);
+            // Блокируем кнопку и запускаем игру
+            appState.gameInProgress = true;
+            newStartBtn.disabled = true;
+            newStartBtn.style.opacity = '0.5';
+            newStartBtn.style.cursor = 'not-allowed';
+            newStartBtn.textContent = 'Игра запущена...';
+            
+            try {
+                await launchGame(gameId, bet, appState.selectedGameMode);
+            } catch (error) {
+                // В случае ошибки разблокируем кнопку
+                appState.gameInProgress = false;
+                newStartBtn.disabled = false;
+                newStartBtn.style.opacity = '1';
+                newStartBtn.style.cursor = 'pointer';
+                newStartBtn.textContent = 'Начать игру';
+            }
         });
     }
     
@@ -1117,6 +1140,16 @@ async function launchGame(gameId, bet, mode) {
             const errorData = await response.json().catch(() => ({}));
             const errorMsg = errorData.error || 'Ошибка запуска игры';
             
+            // Разблокируем кнопку при ошибке
+            appState.gameInProgress = false;
+            const startBtn = document.getElementById('start-game-btn');
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.style.opacity = '1';
+                startBtn.style.cursor = 'pointer';
+                startBtn.textContent = 'Начать игру';
+            }
+            
             if (errorMsg.includes('balance') || errorMsg.includes('средств')) {
                 showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}`);
             } else {
@@ -1126,6 +1159,16 @@ async function launchGame(gameId, bet, mode) {
     } catch (error) {
         console.error('Ошибка запуска игры:', error);
         showToast('Ошибка запуска игры');
+        
+        // Разблокируем кнопку при ошибке
+        appState.gameInProgress = false;
+        const startBtn = document.getElementById('start-game-btn');
+        if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.style.opacity = '1';
+            startBtn.style.cursor = 'pointer';
+            startBtn.textContent = 'Начать игру';
+        }
     }
 }
 
@@ -1163,20 +1206,54 @@ async function checkGameResult(gameId) {
         if (attempts >= maxAttempts) {
             clearInterval(checkInterval);
             showToast('Таймаут ожидания результата');
+            // Разблокируем кнопку при таймауте
+            appState.gameInProgress = false;
+            const startBtn = document.getElementById('start-game-btn');
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.style.opacity = '1';
+                startBtn.style.cursor = 'pointer';
+                startBtn.textContent = 'Начать игру';
+            }
         }
     }, 500); // Проверяем каждые 0.5 секунды для быстрого отклика
 }
 
 // Отобразить результат игры
 function displayGameResult(result) {
-    // Определяем название стикера на основе типа игры и результата
-    let stickerName = getStickerNameForResult(result.game_type, result.result);
+    // ВАЖНО: Если есть массив throws (результаты каждого броска), используем его для стикеров
+    // Иначе используем result (сумму) для обратной совместимости
+    let stickerNames = [];
+    
+    if (result.throws && Array.isArray(result.throws) && result.throws.length > 1) {
+        // Есть несколько бросков - показываем стикер для каждого броска
+        stickerNames = result.throws.map(throwValue => 
+            getStickerNameForResult(result.game_type, throwValue)
+        );
+    } else {
+        // Один бросок или старая версия API - используем result
+        const singleResult = result.throws && result.throws.length === 1 
+            ? result.throws[0] 
+            : result.result;
+        stickerNames = [getStickerNameForResult(result.game_type, singleResult)];
+    }
     
     // Показываем модальное окно с результатом
-    showGameResultModal(result, stickerName);
+    showGameResultModal(result, stickerNames);
     
     // Обновляем баланс
     appState.balance = result.new_balance;
+    
+    // Разблокируем кнопку "Начать игру" после завершения игры
+    appState.gameInProgress = false;
+    const startBtn = document.getElementById('start-game-btn');
+    if (startBtn) {
+        startBtn.disabled = false;
+        startBtn.style.opacity = '1';
+        startBtn.style.cursor = 'pointer';
+        startBtn.textContent = 'Начать игру';
+    }
+    
     updateUI();
 }
 
@@ -1218,14 +1295,24 @@ function getStickerNameForResult(gameType, result) {
 }
 
 // Показать модальное окно результата игры
-async function showGameResultModal(result, stickerName) {
+async function showGameResultModal(result, stickerNames) {
     // Определяем стикер победы/поражения
     const resultStickerName = result.win > 0 ? 'results_win' : 'results_lose';
+    
+    // Если stickerNames - строка (старая версия), преобразуем в массив
+    if (typeof stickerNames === 'string') {
+        stickerNames = [stickerNames];
+    }
     
     // Создаем временное модальное окно для результата
     const modal = document.createElement('div');
     modal.className = 'modal active';
     modal.id = 'game-result-modal';
+    
+    // Создаем контейнер для стикеров результатов (несколько стикеров в ряд)
+    const stickersHTML = stickerNames.map(stickerName => 
+        `<div class="result-sticker" data-sticker="${stickerName}" style="display: inline-block; margin: 0 5px;"></div>`
+    ).join('');
     
     modal.innerHTML = `
         <div class="modal-backdrop"></div>
@@ -1234,7 +1321,9 @@ async function showGameResultModal(result, stickerName) {
                 <h2>Результат игры</h2>
             </div>
             <div class="modal-body" style="text-align: center;">
-                <div class="result-sticker" data-sticker="${stickerName}"></div>
+                <div class="result-stickers-container" style="display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 5px; margin: 10px 0;">
+                    ${stickersHTML}
+                </div>
                 <div class="win-lose-sticker" data-sticker="${resultStickerName}"></div>
                 <div style="font-size: 24px; margin: 20px 0 10px; color: ${result.win > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">
                     ${result.win > 0 ? `Выигрыш: $${result.win.toFixed(2)}` : 'Проигрыш'}
@@ -1251,8 +1340,13 @@ async function showGameResultModal(result, stickerName) {
     `;
     document.body.appendChild(modal);
     
-    // Загружаем стикеры через API
-    await loadStickerForElement(modal.querySelector('.result-sticker'), stickerName);
+    // Загружаем стикеры через API для каждого стикера результата
+    const stickerElements = modal.querySelectorAll('.result-sticker');
+    for (let i = 0; i < stickerElements.length; i++) {
+        await loadStickerForElement(stickerElements[i], stickerNames[i]);
+    }
+    
+    // Загружаем стикер победы/поражения
     await loadStickerForElement(modal.querySelector('.win-lose-sticker'), resultStickerName);
     
     // Обработчик кнопки "Понятно"
