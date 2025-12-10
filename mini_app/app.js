@@ -926,6 +926,9 @@ function initModesStep(gameId) {
     // Кнопка "Далее" к подтверждению
     const btnNextToStart = document.getElementById('btn-next-to-start');
     if (btnNextToStart) {
+        // Изначально отключаем кнопку
+        btnNextToStart.disabled = true;
+        
         btnNextToStart.addEventListener('click', () => {
             if (!appState.selectedGameMode) {
                 showToast('Выберите режим игры');
