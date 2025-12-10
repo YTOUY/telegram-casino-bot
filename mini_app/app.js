@@ -10,7 +10,9 @@ const appState = {
     balance: 0,
     baseBet: 1.0,
     stickers: {},
-    checkStep: 1
+    checkStep: 1,
+    currentGameId: null,
+    selectedGameMode: null
 };
 
 // API endpoints
@@ -701,12 +703,13 @@ async function startGame(gameId) {
         return;
     }
     
-    // Открываем интерфейс выбора режима ставки
-    showGameModeModal(gameId);
+    // Открываем страницу игры вместо модального окна
+    showGamePage(gameId);
 }
 
 // Показать модальное окно выбора режима игры
-function showGameModeModal(gameId) {
+// Показать страницу игры
+function showGamePage(gameId) {
     const gameNames = {
         'dice': 'Кубик',
         'dart': 'Дартс',
@@ -717,115 +720,103 @@ function showGameModeModal(gameId) {
     
     const gameName = gameNames[gameId] || 'Игра';
     
-    // Создаем модальное окно с выбором режима
-    const modal = document.createElement('div');
-    modal.className = 'modal active';
-    modal.id = 'game-mode-modal';
+    // Сохраняем текущий gameId для использования в обработчиках
+    appState.currentGameId = gameId;
+    
+    // Обновляем заголовок страницы
+    const gamePageTitle = document.getElementById('game-page-title');
+    if (gamePageTitle) {
+        gamePageTitle.textContent = gameName;
+    }
+    
+    // Устанавливаем значение ставки
+    const betInput = document.getElementById('game-bet-input');
+    if (betInput) {
+        betInput.value = appState.baseBet.toFixed(2);
+    }
     
     // Получаем доступные режимы для игры
     const modes = getGameModes(gameId);
-    let selectedMode = null;
+    const modesContainer = document.getElementById('game-modes-container');
+    if (modesContainer) {
+        modesContainer.innerHTML = modes.map(mode => `
+            <button class="game-mode-btn" data-mode="${mode.value}">
+                <span class="mode-name">${mode.name.split(' x')[0]}</span>
+                <span class="mode-multiplier">x${mode.name.split(' x')[1] || ''}</span>
+            </button>
+        `).join('');
+    }
     
-    modal.innerHTML = `
-        <div class="modal-backdrop"></div>
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <h2>${gameName}</h2>
-                <button class="modal-close" onclick="document.getElementById('game-mode-modal').remove()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; color: var(--text-secondary); font-size: 14px;">Ставка:</label>
-                    <input type="number" id="game-bet-input" class="input-field" step="0.01" min="0.1" value="${appState.baseBet.toFixed(2)}" placeholder="Введите ставку">
-                </div>
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 12px; color: var(--text-secondary); font-size: 14px;">Выберите режим игры:</label>
-                    <div id="game-modes-container" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; max-height: 400px; overflow-y: auto; padding-right: 5px;">
-                        ${modes.map(mode => `
-                            <button class="game-mode-btn" data-mode="${mode.value}" style="
-                                background: var(--bg-card);
-                                border: 2px solid var(--border-color);
-                                border-radius: 10px;
-                                padding: 12px 8px;
-                                color: var(--text-primary);
-                                font-size: 13px;
-                                font-weight: 500;
-                                cursor: pointer;
-                                transition: all 0.3s ease;
-                                text-align: center;
-                                white-space: nowrap;
-                                overflow: hidden;
-                                text-overflow: ellipsis;
-                            ">
-                                ${mode.name}
-                            </button>
-                        `).join('')}
-                    </div>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn-primary" id="start-game-btn" disabled style="opacity: 0.5; cursor: not-allowed;">Начать игру</button>
-                    <button class="btn-secondary modal-close" onclick="document.getElementById('game-mode-modal').remove()">Отмена</button>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(modal);
+    // Сбрасываем состояние
+    appState.selectedGameMode = null;
+    const startBtn = document.getElementById('start-game-btn');
+    if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.style.opacity = '0.5';
+        startBtn.style.cursor = 'not-allowed';
+    }
     
     // Обработчики выбора режима
-    const modeButtons = modal.querySelectorAll('.game-mode-btn');
-    const startBtn = document.getElementById('start-game-btn');
-    
+    const modeButtons = modesContainer?.querySelectorAll('.game-mode-btn') || [];
     modeButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             // Убираем выделение с других кнопок
             modeButtons.forEach(b => {
-                b.style.borderColor = 'var(--border-color)';
-                b.style.background = 'var(--bg-card)';
+                b.classList.remove('active');
             });
             
             // Выделяем выбранную кнопку
-            btn.style.borderColor = 'var(--accent-green)';
-            btn.style.background = 'rgba(0, 255, 136, 0.1)';
+            btn.classList.add('active');
+            appState.selectedGameMode = btn.dataset.mode;
             
-            selectedMode = btn.dataset.mode;
-            startBtn.disabled = false;
-            startBtn.style.opacity = '1';
-            startBtn.style.cursor = 'pointer';
+            if (startBtn) {
+                startBtn.disabled = false;
+                startBtn.style.opacity = '1';
+                startBtn.style.cursor = 'pointer';
+            }
         });
     });
     
     // Обработчик запуска игры
-    startBtn.addEventListener('click', async () => {
-        if (!selectedMode) {
-            showToast('Выберите режим игры');
-            return;
-        }
+    if (startBtn) {
+        // Удаляем старые обработчики
+        const newStartBtn = startBtn.cloneNode(true);
+        startBtn.parentNode.replaceChild(newStartBtn, startBtn);
         
-        const bet = parseFloat(document.getElementById('game-bet-input').value);
-        
-        if (bet < 0.1) {
-            showToast('Минимальная ставка: $0.10');
-            return;
-        }
-        
-        // Проверяем баланс перед запуском
-        if (appState.balance < bet) {
-            showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
-            return;
-        }
-        
-        // Закрываем модальное окно
-        modal.remove();
-        
-        // Запускаем игру
-        await launchGame(gameId, bet, selectedMode);
-    });
+        newStartBtn.addEventListener('click', async () => {
+            if (!appState.selectedGameMode) {
+                showToast('Выберите режим игры');
+                return;
+            }
+            
+            const bet = parseFloat(betInput?.value || appState.baseBet);
+            
+            if (bet < 0.1) {
+                showToast('Минимальная ставка: $0.10');
+                return;
+            }
+            
+            // Проверяем баланс перед запуском
+            if (appState.balance < bet) {
+                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
+                return;
+            }
+            
+            // Запускаем игру
+            await launchGame(gameId, bet, appState.selectedGameMode);
+        });
+    }
     
-    // Закрытие по клику на backdrop
-    modal.querySelector('.modal-backdrop').addEventListener('click', () => {
-        modal.remove();
-    });
+    // Обработчик кнопки "Назад"
+    const backBtn = document.getElementById('btn-back-to-games');
+    if (backBtn) {
+        backBtn.onclick = () => {
+            switchPage('play');
+        };
+    }
+    
+    // Переключаемся на страницу игры
+    switchPage('game');
 }
 
 // Получить доступные режимы для игры (как в боте)
@@ -1046,13 +1037,13 @@ async function showGameResultModal(result, stickerName) {
     // Создаем временное модальное окно для результата
     const modal = document.createElement('div');
     modal.className = 'modal active';
+    modal.id = 'game-result-modal';
     
     modal.innerHTML = `
         <div class="modal-backdrop"></div>
         <div class="modal-content">
             <div class="modal-header">
                 <h2>Результат игры</h2>
-                <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
             </div>
             <div class="modal-body" style="text-align: center;">
                 <div class="result-sticker" data-sticker="${stickerName}"></div>
@@ -1063,9 +1054,10 @@ async function showGameResultModal(result, stickerName) {
                 <div style="font-size: 16px; color: var(--text-secondary);">
                     Результат: ${result.result}
                 </div>
-                <div style="font-size: 16px; color: var(--text-secondary); margin-top: 5px;">
+                <div style="font-size: 16px; color: var(--text-secondary); margin-top: 5px; margin-bottom: 20px;">
                     Новый баланс: $${result.new_balance.toFixed(2)}
                 </div>
+                <button class="btn-primary" id="btn-understand-result" style="width: 100%;">Понятно</button>
             </div>
         </div>
     `;
@@ -1075,10 +1067,18 @@ async function showGameResultModal(result, stickerName) {
     await loadStickerForElement(modal.querySelector('.result-sticker'), stickerName);
     await loadStickerForElement(modal.querySelector('.win-lose-sticker'), resultStickerName);
     
-    // Автоматически закрываем через 5 секунд
-    setTimeout(() => {
+    // Обработчик кнопки "Понятно"
+    const understandBtn = document.getElementById('btn-understand-result');
+    if (understandBtn) {
+        understandBtn.addEventListener('click', () => {
+            modal.remove();
+        });
+    }
+    
+    // Закрытие по клику на backdrop (опционально)
+    modal.querySelector('.modal-backdrop').addEventListener('click', () => {
         modal.remove();
-    }, 5000);
+    });
 }
 
 // Получить путь к локальному стикеру
