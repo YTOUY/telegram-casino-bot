@@ -100,8 +100,15 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
         # Помечаем игру как обработанную
         state["result_processed"] = True
         # Используем реальные результаты из состояния
+        # ВАЖНО: throws должен содержать список результатов каждого броска (например, [1, 1, 1]), а НЕ сумму!
         throws = state.get("throws", [])
-        logger.info(f"🎲 Фактические результаты бросков: {throws}")
+        logger.info(f"🎲 Фактические результаты бросков (throws): {throws}, тип: {type(throws)}, длина: {len(throws) if throws else 0}")
+        
+        # Проверяем, что throws - это список, а не число
+        if not isinstance(throws, list):
+            logger.error(f"❌ ОШИБКА: throws не является списком! Значение: {throws}, тип: {type(throws)}")
+            throws = [throws] if throws else []
+            logger.warning(f"⚠️ Преобразовано в список: {throws}")
         
         # Получаем конфигурацию игры
         config = GAME_CONFIGS.get(game_type)
@@ -423,10 +430,16 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
             logger.error(f"❌ Ошибка при отправке сообщения с результатом: {e}", exc_info=True)
         
         # Отправляем стикеры для каждого эмодзи результата в один ряд (только если несколько бросков)
+        # ВАЖНО: Используем throws (список результатов каждого броска), а НЕ game_result (сумму)!
+        logger.info(f"🎲 Результаты бросков (throws): {throws}, количество: {len(throws)}")
+        logger.info(f"📊 Результат игры (game_result, сумма): {game_result}")
+        
         if len(throws) > 1:
             try:
-                logger.info(f"🎨 Отправляю стикеры для {len(throws)} результатов: {throws}")
-                await send_result_stickers(bot, chat_id, game_type, throws, original_message_id)
+                # Создаем копию списка throws, чтобы гарантировать, что используем правильные значения
+                throws_copy = list(throws)
+                logger.info(f"🎨 Отправляю стикеры для {len(throws_copy)} результатов: {throws_copy}")
+                await send_result_stickers(bot, chat_id, game_type, throws_copy, original_message_id)
             except Exception as e:
                 logger.error(f"❌ Ошибка при отправке стикеров результата: {e}", exc_info=True)
         else:
@@ -493,15 +506,24 @@ def get_sticker_name_for_result(game_type: str, result: int) -> str:
 
 
 async def send_result_stickers(bot, chat_id: int, game_type: str, throws: list, original_message_id: int = None):
-    """Отправить стикеры для каждого эмодзи результата в один ряд"""
-    logger.info(f"🎨 send_result_stickers вызвана: game_type={game_type}, throws={throws}, chat_id={chat_id}")
+    """Отправить стикеры для каждого эмодзи результата в один ряд
+    
+    ВАЖНО: throws должен быть списком результатов каждого броска (например, [1, 1, 1] для трех кубиков с единицами),
+    а НЕ суммой результатов (например, 3)!
+    """
+    logger.info(f"🎨 send_result_stickers вызвана: game_type={game_type}, throws={throws} (тип: {type(throws)}, длина: {len(throws) if throws else 0}), chat_id={chat_id}")
+    
+    # Проверяем, что throws - это список
+    if not isinstance(throws, list):
+        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: throws не является списком! Значение: {throws}, тип: {type(throws)}")
+        return
     
     if not throws or len(throws) == 0:
-        logger.warning("⚠️ Нет результатов для отправки стикеров")
+        logger.warning("⚠️ Нет результатов для отправки стикеров (пустой список)")
         return
     
     if len(throws) == 1:
-        logger.info(f"ℹ️ Только 1 результат, стикеры не отправляются")
+        logger.info(f"ℹ️ Только 1 результат, стикеры не отправляются (throws={throws})")
         return
     
     try:
