@@ -180,15 +180,39 @@ async def handle_sticker(request: Request) -> Response:
     try:
         sticker = await db.get_sticker(sticker_name)
         if not sticker:
+            logger.warning(f"⚠️ Стикер '{sticker_name}' не найден в базе данных")
             return web.json_response({"error": "Sticker not found"}, status=404)
         
+        # Получаем URL файла стикера
         file_url = await get_sticker_file_url(bot, sticker['file_id'])
+        
+        if not file_url:
+            logger.warning(f"⚠️ Не удалось получить URL для стикера {sticker['file_id']}, пробуем через get_file")
+            # Пробуем создать URL напрямую через file_id
+            try:
+                file_info = await bot.get_file(sticker['file_id'])
+                if file_info and file_info.file_path:
+                    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+                    logger.info(f"✅ URL получен через get_file: {file_url}")
+                else:
+                    logger.error(f"❌ file_path не найден для стикера {sticker['file_id']}")
+                    return web.json_response({"error": "Failed to get sticker file path"}, status=500)
+            except Exception as e:
+                logger.error(f"❌ Ошибка при получении file_path: {e}")
+                return web.json_response({"error": "Failed to get sticker URL"}, status=500)
+        
+        # Определяем, является ли это TGS файлом
+        is_tgs = file_url.lower().endswith('.tgs') or '.tgs' in file_url.lower()
+        
+        logger.info(f"✅ Стикер '{sticker_name}' загружен: {file_url} (TGS: {is_tgs})")
+        
         return web.json_response({
             "file_id": sticker['file_id'],
-            "file_url": file_url or f"https://api.telegram.org/file/bot{BOT_TOKEN}/{sticker['file_id']}"
+            "file_url": file_url,
+            "is_tgs": is_tgs
         })
     except Exception as e:
-        logger.error(f"Ошибка получения стикера: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка получения стикера '{sticker_name}': {e}", exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
 
 
