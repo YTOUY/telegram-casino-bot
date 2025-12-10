@@ -1,0 +1,1193 @@
+/* Основные стили */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-primary: #1a1a2e; /* Темный сине-серый фон как на скриншоте */
+    --bg-secondary: #16213e;
+    --bg-card: #0f1419;
+    --bg-nav: #000000; /* Черная панель */
+    --text-primary: #ffffff;
+    --text-secondary: #888888;
+    --accent-green: #00ff88; /* Яркий зеленый для текста как на скриншоте */
+    --accent-red: #cc4444; /* Не яркий красный */
+    --accent-gray: #666666; /* Серый */
+    --border-color: rgba(255, 255, 255, 0.1);
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.5); /* Более выраженные тени */
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow-x: hidden;
+    min-height: 100vh;
+    min-height: -webkit-fill-available; /* Для iOS Safari */
+    padding-bottom: 80px;
+    padding-bottom: calc(80px + env(safe-area-inset-bottom)); /* Учитываем безопасную зону */
+    -webkit-tap-highlight-color: transparent; /* Убираем подсветку при нажатии на мобильных */
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Начальный экран */
+.splash-screen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    height: 100vh;
+    height: -webkit-fill-available; /* Для iOS Safari */
+    background: #1a1a2e; /* Темный сине-серый фон как на скриншоте */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeOut 0.5s ease-out 5s forwards;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+.splash-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 30px;
+}
+
+.welcome-sticker {
+    width: 200px;
+    height: 200px;
+    display: block;
+    opacity: 0;
+    transition: opacity 0.5s ease-in;
+    animation: stickerAnimation 2s ease-in-out;
+}
+
+.welcome-sticker img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.welcome-text {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--accent-green);
+    text-align: center;
+    display: none; /* Скрыто до появления через 2 секунды */
+    animation: fadeIn 0.5s ease-in both;
+}
+
+.loading-container {
+    margin-top: 20px;
+}
+
+.loading-circle {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(0, 255, 136, 0.2);
+    border-top-color: var(--accent-green);
+    border-radius: 50%;
+    display: none; /* Скрыто до появления через 2 секунды */
+    animation: spin 1s linear infinite;
+    background: transparent; /* Прозрачный центр как на скриншоте */
+}
+
+@keyframes stickerAnimation {
+    0% {
+        opacity: 0;
+        transform: scale(0.5);
+    }
+    50% {
+        transform: scale(1.1);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes fadeOut {
+    to {
+        opacity: 0;
+        visibility: hidden;
+    }
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Основное приложение */
+.main-app {
+    min-height: 100vh;
+    min-height: -webkit-fill-available; /* Для iOS Safari */
+}
+
+.page-content {
+    padding: 20px;
+    padding-bottom: 100px;
+}
+
+.page {
+    display: none;
+}
+
+.page.active {
+    display: block;
+}
+
+.page-header {
+    margin-bottom: 30px;
+}
+
+.page-header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+/* Нижняя панель навигации */
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-nav); /* Черный цвет */
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.8), 0 -2px 10px rgba(0, 0, 0, 0.6); /* Усиленные тени */
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 10px 0;
+    padding-bottom: env(safe-area-inset-bottom, 10px);
+    z-index: 100;
+    /* Нижняя часть не видна - панель как бы "висит" над контентом */
+}
+
+.nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 8px 12px;
+    transition: all 0.3s ease;
+    flex: 1;
+}
+
+.nav-btn.active {
+    color: var(--accent-green);
+}
+
+.nav-icon {
+    width: 24px;
+    height: 24px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.nav-label {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* Кнопки */
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-green) 0%, #00cc6a 100%);
+    color: var(--bg-primary);
+    border: none;
+    padding: 14px 24px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(0, 255, 136, 0.4);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-width: fit-content;
+    max-width: 100%;
+    width: auto;
+}
+
+.btn-primary::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 255, 136, 0.6);
+}
+
+.btn-primary:active {
+    transform: translateY(0);
+    box-shadow: 0 2px 10px rgba(0, 255, 136, 0.4);
+}
+
+.btn-primary:active::before {
+    width: 300px;
+    height: 300px;
+}
+
+/* Пульсирующие кнопки */
+.btn-primary.btn-pulse {
+    animation: pulseGlow 2s infinite;
+}
+
+@keyframes pulseGlow {
+    0%, 100% {
+        box-shadow: 0 4px 15px rgba(0, 255, 136, 0.4), 0 0 0 0 rgba(0, 255, 136, 0.7);
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 4px 25px rgba(0, 255, 136, 0.8), 0 0 0 15px rgba(0, 255, 136, 0);
+        transform: scale(1.02);
+    }
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    border: 2px solid var(--border-color);
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-width: fit-content;
+    max-width: 100%;
+    width: auto;
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: translateY(-2px);
+}
+
+/* Страница Играть */
+.games-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+}
+
+.game-card {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 15px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.game-card:hover {
+    border-color: var(--accent-green);
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px rgba(0, 255, 136, 0.2);
+}
+
+.game-icon {
+    font-size: 48px;
+    margin-bottom: 10px;
+}
+
+.game-sticker {
+    width: 100%;
+    height: 120px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.game-sticker img,
+.game-sticker > div {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.game-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+/* Страница Кошелек */
+.wallet-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.balance-card {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 15px;
+    padding: 30px;
+    text-align: center;
+}
+
+.balance-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+.balance-amount {
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--accent-green);
+    margin-bottom: 5px;
+}
+
+.balance-ton {
+    font-size: 16px;
+    color: var(--text-secondary);
+}
+
+.wallet-actions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+}
+
+.wallet-actions .btn-primary {
+    width: 100%;
+}
+
+.deposit-methods,
+.withdraw-methods {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.method-btn {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 14px 20px;
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+    min-width: fit-content;
+    max-width: 100%;
+    width: auto;
+}
+
+.method-btn:hover {
+    border-color: var(--accent-green);
+    background: rgba(0, 255, 136, 0.1);
+    transform: translateY(-2px);
+}
+
+/* Подарки */
+.gifts-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 0;
+}
+
+.gift-item {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px 8px;
+    text-align: center;
+    cursor: not-allowed;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 140px;
+    transition: none;
+}
+
+.gift-item:hover {
+    transform: none;
+    border-color: var(--border-color);
+    background: var(--bg-card);
+}
+
+.gift-image-container {
+    width: 100%;
+    height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.gift-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.gift-info {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.gift-price {
+    font-size: 11px;
+    color: var(--text-primary);
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.gift-price-black {
+    font-size: 10px;
+    color: var(--text-secondary);
+    line-height: 1.2;
+}
+
+/* Страница Профиль */
+.profile-content {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+}
+
+.profile-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 15px;
+    padding: 20px;
+}
+
+.avatar-container {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 3px solid var(--accent-green);
+}
+
+.avatar {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.profile-info {
+    flex: 1;
+}
+
+.profile-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 5px;
+}
+
+.profile-username {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.referral-section {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 15px;
+    padding: 20px;
+}
+
+.referral-section h2 {
+    font-size: 20px;
+    margin-bottom: 20px;
+    color: var(--text-primary);
+}
+
+.referral-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.stat-item {
+    background: rgba(0, 255, 136, 0.1);
+    border: 1px solid var(--accent-green);
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+}
+
+.stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent-green);
+}
+
+.referral-link-container {
+    display: flex;
+    gap: 10px;
+}
+
+.referral-link-input {
+    flex: 1;
+    background: var(--bg-primary);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+/* Страница Топ */
+.top-content {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.top-filters,
+.top-periods {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.btn-filter,
+.btn-period {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 20px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.btn-filter.active,
+.btn-period.active {
+    background: rgba(0, 255, 136, 0.2);
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+}
+
+.top-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.top-item {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.top-item:hover {
+    border-color: var(--accent-green);
+}
+
+.top-item-position {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent-green);
+    min-width: 40px;
+}
+
+.top-item-name {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-left: 15px;
+}
+
+.top-item-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent-green);
+}
+
+/* Страница Настройки */
+.settings-content {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.btn-setting {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 15px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    width: 100%;
+    text-align: center;
+}
+
+.btn-setting:hover {
+    border-color: var(--accent-green);
+    background: rgba(0, 255, 136, 0.1);
+    transform: translateX(5px);
+}
+
+.setting-icon {
+    font-size: 24px;
+}
+
+.setting-text {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.setting-value {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+/* Модальные окна */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modal-backdrop {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(5px);
+}
+
+.modal-content {
+    position: relative;
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 20px;
+    width: 90%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+    z-index: 1001;
+    animation: modalSlideIn 0.3s ease;
+}
+
+/* Стили для скроллбара в модальных окнах */
+.modal-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.modal-content::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+    border-radius: 10px;
+}
+
+.modal-content::-webkit-scrollbar-thumb {
+    background: var(--accent-green);
+    border-radius: 10px;
+}
+
+.modal-content::-webkit-scrollbar-thumb:hover {
+    background: #00cc6a;
+}
+
+/* Стили для скроллбара в контейнере режимов игры */
+#game-modes-container::-webkit-scrollbar {
+    width: 4px;
+}
+
+#game-modes-container::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+    border-radius: 10px;
+}
+
+#game-modes-container::-webkit-scrollbar-thumb {
+    background: var(--accent-green);
+    border-radius: 10px;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-50px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 28px;
+    cursor: pointer;
+    padding: 0;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.3s ease;
+}
+
+.modal-close:hover {
+    color: var(--text-primary);
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.input-field {
+    width: 100%;
+    background: var(--bg-primary);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px;
+    color: var(--text-primary);
+    font-size: 16px;
+    margin-bottom: 15px;
+}
+
+.input-field:focus {
+    outline: none;
+    border-color: var(--accent-green);
+}
+
+/* Убираем spinner из input[type="number"] */
+.input-field[type="number"]::-webkit-inner-spin-button,
+.input-field[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.input-field[type="number"] {
+    -moz-appearance: textfield;
+}
+
+.input-field select {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: none;
+    width: 100%;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.check-step {
+    margin-bottom: 20px;
+}
+
+.check-step label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+/* Toast уведомления */
+.toast {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-card);
+    border: 2px solid var(--accent-green);
+    border-radius: 12px;
+    padding: 15px 25px;
+    color: var(--text-primary);
+    font-size: 14px;
+    z-index: 2000;
+    display: none;
+    animation: toastSlideIn 0.3s ease;
+}
+
+.toast.show {
+    display: block;
+}
+
+@keyframes toastSlideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+/* Кнопки ставок для игр */
+.btn-bet {
+    background: var(--bg-card);
+    border: 2px solid var(--accent-green);
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: var(--accent-green);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-width: fit-content;
+    max-width: 100%;
+    width: auto;
+}
+
+.btn-bet::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.3), transparent);
+    transition: left 0.5s;
+}
+
+.btn-bet:hover {
+    background: linear-gradient(135deg, var(--accent-green) 0%, #00cc6a 100%);
+    color: var(--bg-primary);
+    transform: scale(1.05);
+    box-shadow: 0 4px 15px rgba(0, 255, 136, 0.5);
+}
+
+.btn-bet:hover::after {
+    left: 100%;
+}
+
+.btn-bet:active {
+    transform: scale(0.98);
+}
+
+.btn-bet.btn-pulse {
+    animation: pulseGlow 2s infinite;
+}
+
+/* Кнопки управления ставкой */
+.btn-bet-control {
+    background: rgba(0, 255, 136, 0.1);
+    color: var(--accent-green);
+    border: 2px solid var(--accent-green);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    min-width: fit-content;
+}
+
+.btn-bet-control:hover {
+    background: rgba(0, 255, 136, 0.2);
+    transform: scale(1.05);
+}
+
+.btn-bet-control.active {
+    background: linear-gradient(135deg, var(--accent-green) 0%, #00cc6a 100%);
+    color: var(--bg-primary);
+    box-shadow: 0 4px 15px rgba(0, 255, 136, 0.5);
+}
+
+/* Адаптивность для мобильных устройств */
+@media (max-width: 480px) {
+    body {
+        font-size: 14px;
+    }
+    
+    .page-content {
+        padding: 15px;
+        padding-bottom: 100px;
+    }
+    
+    .page-header h1 {
+        font-size: 24px;
+    }
+    
+    .games-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+    }
+    
+    .game-card {
+        padding: 15px;
+    }
+    
+    .game-name {
+        font-size: 14px;
+    }
+    
+    .wallet-actions {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    
+    .gifts-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+    }
+    
+    .btn-primary {
+        padding: 12px 20px;
+        font-size: 14px;
+        width: 100%;
+    }
+    
+    .btn-secondary {
+        padding: 10px 16px;
+        font-size: 13px;
+        width: 100%;
+    }
+    
+    .method-btn {
+        padding: 12px 16px;
+        font-size: 14px;
+        width: 100%;
+    }
+    
+    .btn-setting {
+        padding: 14px 16px;
+        font-size: 14px;
+    }
+    
+    .setting-text {
+        font-size: 14px;
+    }
+    
+    .balance-card {
+        padding: 20px;
+    }
+    
+    .balance-amount {
+        font-size: 28px;
+    }
+    
+    .top-item {
+        padding: 12px;
+    }
+    
+    .top-item-position {
+        font-size: 18px;
+        min-width: 35px;
+    }
+    
+    .top-item-name {
+        font-size: 14px;
+    }
+    
+    .top-item-value {
+        font-size: 14px;
+    }
+    
+    .modal-content {
+        width: 95%;
+        max-width: 95%;
+    }
+    
+    .modal-body {
+        padding: 15px;
+    }
+    
+    .nav-btn {
+        padding: 6px 8px;
+    }
+    
+    .nav-icon {
+        width: 20px;
+        height: 20px;
+    }
+    
+    .nav-label {
+        font-size: 10px;
+    }
+    
+    .bottom-nav {
+        padding: 8px 0;
+        padding-bottom: env(safe-area-inset-bottom, 8px);
+    }
+    
+    .btn-bet {
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+    
+    .btn-bet-control {
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+    
+    .profile-header {
+        padding: 15px;
+        gap: 15px;
+    }
+    
+    .avatar-container {
+        width: 60px;
+        height: 60px;
+    }
+    
+    .profile-name {
+        font-size: 18px;
+    }
+    
+    .profile-username {
+        font-size: 12px;
+    }
+    
+    .referral-stats {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    
+    .stat-value {
+        font-size: 16px;
+    }
+}
+
+@media (max-width: 360px) {
+    .games-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .gifts-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .top-filters,
+    .top-periods {
+        flex-direction: column;
+    }
+    
+    .btn-filter,
+    .btn-period {
+        width: 100%;
+    }
+}
+

@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Демонстрация кнопок для Telegram Mini App</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #ffffff;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 0 2px 10px rgba(0, 255, 136, 0.3);
+        }
+
+        .section {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 40px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .section-title {
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            color: #00ff88;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+
+        /* Основные кнопки (Primary) */
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 18px 30px;
+            border-radius: 15px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-primary::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 10px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:active::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        /* Вторичные кнопки (Secondary) */
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            padding: 15px 25px;
+            border-radius: 12px;
+            font-size: 1em;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary:active {
+            transform: translateY(0);
+        }
+
+        /* Кнопки ставок (Betting) */
+        .btn-bet {
+            background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
+            color: #00ff88;
+            border: 2px solid #00ff88;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 0.95em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-bet::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.3), transparent);
+            transition: left 0.5s;
+        }
+
+        .btn-bet:hover {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+            color: #1a1a2e;
+            transform: scale(1.05);
+            box-shadow: 0 4px 15px rgba(0, 255, 136, 0.5);
+        }
+
+        .btn-bet:hover::after {
+            left: 100%;
+        }
+
+        .btn-bet:active {
+            transform: scale(0.98);
+        }
+
+        /* Кнопки навигации (Navigation) */
+        .btn-nav {
+            background: rgba(255, 255, 255, 0.05);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-nav:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-nav:active {
+            transform: scale(0.95);
+        }
+
+        /* Кнопки действий (Action) */
+        .btn-success {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+            color: #1a1a2e;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 12px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 255, 136, 0.4);
+        }
+
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 255, 136, 0.6);
+        }
+
+        .btn-success:active {
+            transform: translateY(0);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 12px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(255, 68, 68, 0.4);
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(255, 68, 68, 0.6);
+        }
+
+        .btn-danger:active {
+            transform: translateY(0);
+        }
+
+        /* Кнопки сумм (Amount) */
+        .btn-amount {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 80px;
+        }
+
+        .btn-amount:hover {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-color: transparent;
+            transform: scale(1.05);
+        }
+
+        .btn-amount:active {
+            transform: scale(0.98);
+        }
+
+        /* Кнопки управления ставкой */
+        .btn-bet-control {
+            background: rgba(0, 255, 136, 0.1);
+            color: #00ff88;
+            border: 2px solid #00ff88;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+        }
+
+        .btn-bet-control:hover {
+            background: rgba(0, 255, 136, 0.2);
+            transform: scale(1.05);
+        }
+
+        .btn-bet-control.active {
+            background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
+            color: #1a1a2e;
+            box-shadow: 0 4px 15px rgba(0, 255, 136, 0.5);
+        }
+
+        /* Анимация пульсации */
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .btn-pulse {
+            animation: pulse 2s infinite;
+        }
+
+        /* Анимация свечения */
+        @keyframes glow {
+            0%, 100% {
+                box-shadow: 0 4px 15px rgba(0, 255, 136, 0.4);
+            }
+            50% {
+                box-shadow: 0 4px 25px rgba(0, 255, 136, 0.8);
+            }
+        }
+
+        .btn-glow {
+            animation: glow 2s infinite;
+        }
+
+        /* Анимация вращения */
+        @keyframes spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .btn-spin {
+            animation: spin 2s linear infinite;
+        }
+
+        /* Кнопки в ряд для управления ставкой */
+        .bet-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        /* Компактные кнопки для ставок */
+        .bet-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+        }
+
+        /* Большие кнопки для главного меню */
+        .main-menu-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .btn-main-menu {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 25px 20px;
+            border-radius: 15px;
+            font-size: 1.2em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-main-menu:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.6);
+        }
+
+        .btn-main-menu:active {
+            transform: translateY(-2px);
+        }
+
+        .btn-main-menu .emoji {
+            font-size: 2em;
+        }
+
+        /* Toast уведомления */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 255, 136, 0.9);
+            color: #1a1a2e;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+            display: none;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .toast.show {
+            display: block;
+        }
+
+        /* Skeleton loader */
+        .skeleton {
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.1) 25%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.1) 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            border-radius: 10px;
+            height: 40px;
+            margin-bottom: 10px;
+        }
+
+        @keyframes loading {
+            0% {
+                background-position: 200% 0;
+            }
+            100% {
+                background-position: -200% 0;
+            }
+        }
+
+        /* Информационные карточки */
+        .info-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .info-card h3 {
+            color: #00ff88;
+            margin-bottom: 10px;
+        }
+
+        /* Адаптивность */
+        @media (max-width: 768px) {
+            .button-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .main-menu-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .bet-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎰 Демонстрация кнопок для Telegram Mini App</h1>
+
+        <!-- Основные кнопки главного меню -->
+        <div class="section">
+            <h2 class="section-title">📱 Главное меню</h2>
+            <div class="main-menu-grid">
+                <button class="btn-main-menu">
+                    <span class="emoji">💼</span>
+                    <span>Кошелек</span>
+                </button>
+                <button class="btn-main-menu">
+                    <span class="emoji">🎮</span>
+                    <span>Игры</span>
+                </button>
+                <button class="btn-main-menu">
+                    <span class="emoji">👤</span>
+                    <span>Профиль</span>
+                </button>
+                <button class="btn-main-menu">
+                    <span class="emoji">⚙️</span>
+                    <span>Настройки</span>
+                </button>
+                <button class="btn-main-menu">
+                    <span class="emoji">🏆</span>
+                    <span>Топ</span>
+                </button>
+                <button class="btn-main-menu">
+                    <span class="emoji">⚔️</span>
+                    <span>PvP</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Основные кнопки (Primary) -->
+        <div class="section">
+            <h2 class="section-title">🎯 Основные кнопки (Primary)</h2>
+            <div class="button-grid">
+                <button class="btn-primary">💼 Кошелек</button>
+                <button class="btn-primary">🎮 Игры</button>
+                <button class="btn-primary">👤 Профиль</button>
+                <button class="btn-primary">⚙️ Настройки</button>
+            </div>
+        </div>
+
+        <!-- Вторичные кнопки -->
+        <div class="section">
+            <h2 class="section-title">🔘 Вторичные кнопки (Secondary)</h2>
+            <div class="button-grid">
+                <button class="btn-secondary">📋 Правила</button>
+                <button class="btn-secondary">📊 Статистика</button>
+                <button class="btn-secondary">💬 Поддержка</button>
+                <button class="btn-secondary">📖 История</button>
+            </div>
+        </div>
+
+        <!-- Кнопки управления ставкой -->
+        <div class="section">
+            <h2 class="section-title">💰 Управление ставкой</h2>
+            <div class="bet-controls">
+                <button class="btn-bet-control">− $0.50</button>
+                <button class="btn-bet-control active">✓ $1.00</button>
+                <button class="btn-bet-control">+ $1.50</button>
+            </div>
+            <div class="info-card">
+                <h3>Текущая ставка: $1.00</h3>
+                <p>Баланс: $100.00</p>
+            </div>
+        </div>
+
+        <!-- Кнопки ставок для кубика -->
+        <div class="section">
+            <h2 class="section-title">🎲 Типы ставок (Кубик)</h2>
+            <div class="bet-grid">
+                <button class="btn-bet">🙏 Чет x1.9</button>
+                <button class="btn-bet">🙏 Нечет x1.9</button>
+                <button class="btn-bet">🙏 3 Чет x7</button>
+                <button class="btn-bet">🙏 3 Нечет x7</button>
+                <button class="btn-bet">1️⃣ 1</button>
+                <button class="btn-bet">2️⃣ 2</button>
+                <button class="btn-bet">3️⃣ 3</button>
+                <button class="btn-bet">4️⃣ 4</button>
+                <button class="btn-bet">5️⃣ 5</button>
+                <button class="btn-bet">6️⃣ 6</button>
+                <button class="btn-bet">🫂 Пара x5.55</button>
+                <button class="btn-bet">🔞 18 x8</button>
+                <button class="btn-bet">💀 21 x11</button>
+                <button class="btn-bet">🍀 111 x100</button>
+                <button class="btn-bet">☘️ 333 x100</button>
+                <button class="btn-bet">🐍 666 x100</button>
+            </div>
+        </div>
+
+        <!-- Кнопки ставок для дартса -->
+        <div class="section">
+            <h2 class="section-title">🎯 Типы ставок (Дартс)</h2>
+            <div class="bet-grid">
+                <button class="btn-bet">⚪ Белое x2</button>
+                <button class="btn-bet">🔴 Красное x1.4</button>
+                <button class="btn-bet">🍏 Центр x6</button>
+                <button class="btn-bet">🌨️ Отскок x6</button>
+                <button class="btn-bet">🚩 3 Красных x7</button>
+                <button class="btn-bet">🥚 3 Белых x21</button>
+                <button class="btn-bet">🏹 3 в Центр x100</button>
+                <button class="btn-bet">🏹 3 Мимо x100</button>
+            </div>
+        </div>
+
+        <!-- Кнопки сумм для вывода -->
+        <div class="section">
+            <h2 class="section-title">💵 Быстрый выбор суммы</h2>
+            <div class="button-row">
+                <button class="btn-amount">$10</button>
+                <button class="btn-amount">$20</button>
+                <button class="btn-amount">$50</button>
+                <button class="btn-amount">$100</button>
+            </div>
+            <div class="button-row">
+                <button class="btn-amount">$250</button>
+                <button class="btn-amount">$500</button>
+                <button class="btn-amount">$1000</button>
+                <button class="btn-amount">$2500</button>
+            </div>
+            <div class="button-row">
+                <button class="btn-amount">Max</button>
+            </div>
+        </div>
+
+        <!-- Кнопки действий -->
+        <div class="section">
+            <h2 class="section-title">✅ Кнопки действий</h2>
+            <div class="button-row">
+                <button class="btn-success">✓ Подтвердить</button>
+                <button class="btn-danger">✗ Отменить</button>
+                <button class="btn-success">💰 Пополнить</button>
+                <button class="btn-success">➖ Вывести</button>
+            </div>
+        </div>
+
+        <!-- Кнопки навигации -->
+        <div class="section">
+            <h2 class="section-title">🧭 Кнопки навигации</h2>
+            <div class="button-row">
+                <button class="btn-nav">⬅️ Назад</button>
+                <button class="btn-nav">➡️ Дальше</button>
+                <button class="btn-nav">⬅️ Назад к выбору</button>
+                <button class="btn-nav">🏠 Главная</button>
+            </div>
+        </div>
+
+        <!-- Кнопки с анимациями -->
+        <div class="section">
+            <h2 class="section-title">✨ Кнопки с анимациями</h2>
+            <div class="button-row">
+                <button class="btn-primary btn-pulse">💫 Пульсация</button>
+                <button class="btn-success btn-glow">✨ Свечение</button>
+                <button class="btn-bet btn-pulse">🎲 Пульсирующая ставка</button>
+            </div>
+        </div>
+
+        <!-- Skeleton loader -->
+        <div class="section">
+            <h2 class="section-title">⏳ Загрузка (Skeleton)</h2>
+            <div class="skeleton"></div>
+            <div class="skeleton"></div>
+            <div class="skeleton"></div>
+        </div>
+
+        <!-- Информационные карточки -->
+        <div class="section">
+            <h2 class="section-title">📋 Информационные карточки</h2>
+            <div class="info-card">
+                <h3>💰 Баланс</h3>
+                <p>Доступно: $100.00</p>
+                <p>Заблокировано: $0.00</p>
+            </div>
+            <div class="info-card">
+                <h3>🏆 Статистика</h3>
+                <p>Оборот: $1,234.56</p>
+                <p>Место в топе: #42</p>
+            </div>
+        </div>
+
+        <!-- Кнопки меню депозита -->
+        <div class="section">
+            <h2 class="section-title">💎 Меню пополнения</h2>
+            <div class="button-grid">
+                <button class="btn-primary">💎 TON</button>
+                <button class="btn-primary">🏝️ CryptoBot</button>
+                <button class="btn-primary">🚀 xRocket</button>
+                <button class="btn-primary">🎁 Подарки</button>
+            </div>
+        </div>
+
+        <!-- Кнопки меню игр -->
+        <div class="section">
+            <h2 class="section-title">🎮 Меню игр</h2>
+            <div class="button-grid">
+                <button class="btn-primary">🎯 Дартс</button>
+                <button class="btn-primary">🎲 Кубик</button>
+                <button class="btn-primary">🎰 Слоты</button>
+                <button class="btn-primary">🎳 Боулинг</button>
+                <button class="btn-primary">🏀 Баскетбол</button>
+                <button class="btn-primary">⚽ Футбол</button>
+            </div>
+        </div>
+
+        <!-- Кнопки слотов -->
+        <div class="section">
+            <h2 class="section-title">🎰 Слоты</h2>
+            <div class="button-row">
+                <button class="btn-primary">😎 10 СПИНОВ</button>
+                <button class="btn-primary">🤑 100 СПИНОВ</button>
+            </div>
+            <div class="button-row">
+                <button class="btn-primary">😊 1 СПИН</button>
+            </div>
+            <div class="button-row">
+                <button class="btn-secondary">🗓️ Множители</button>
+                <button class="btn-secondary">🎮 Игры</button>
+            </div>
+        </div>
+
+        <!-- Кнопки PvP -->
+        <div class="section">
+            <h2 class="section-title">⚔️ PvP Меню</h2>
+            <div class="button-grid">
+                <button class="btn-primary">➕ Создать PvP</button>
+                <button class="btn-secondary">📋 Активные PvP</button>
+                <button class="btn-secondary">📋 Мои PvP</button>
+            </div>
+        </div>
+
+        <!-- Кнопки профиля -->
+        <div class="section">
+            <h2 class="section-title">👤 Профиль</h2>
+            <div class="button-row">
+                <button class="btn-secondary">🎫 Чеки</button>
+                <button class="btn-secondary">🤝 Рефералка</button>
+                <button class="btn-secondary">🎟️ Промокоды</button>
+            </div>
+        </div>
+
+        <!-- Кнопки настроек -->
+        <div class="section">
+            <h2 class="section-title">⚙️ Настройки</h2>
+            <div class="button-grid">
+                <button class="btn-secondary">🔔 Реф. уведомления</button>
+                <button class="btn-secondary">💰 Базовая ставка</button>
+                <button class="btn-secondary">🎫 Создать чек</button>
+                <button class="btn-secondary">🎫 Лотереи</button>
+                <button class="btn-secondary">💬 Поддержка</button>
+            </div>
+        </div>
+
+        <!-- Кнопки топа -->
+        <div class="section">
+            <h2 class="section-title">🏆 Топ</h2>
+            <div class="button-row">
+                <button class="btn-secondary">♟️ Топ игроков</button>
+                <button class="btn-secondary">✨ Топ чатов</button>
+            </div>
+            <div class="button-row">
+                <button class="btn-secondary">📅 За день</button>
+                <button class="btn-secondary">📆 За месяц</button>
+                <button class="btn-secondary">🌍 За все время</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast уведомление -->
+    <div class="toast" id="toast">
+        Уведомление показано!
+    </div>
+
+    <script>
+        // Демонстрация toast уведомления
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Добавляем обработчики для всех кнопок
+        document.querySelectorAll('button').forEach(button => {
+            button.addEventListener('click', function() {
+                // Анимация нажатия
+                this.style.transform = 'scale(0.95)';
+                setTimeout(() => {
+                    this.style.transform = '';
+                }, 150);
+
+                // Показываем toast для некоторых кнопок
+                if (this.classList.contains('btn-primary') || 
+                    this.classList.contains('btn-success') || 
+                    this.classList.contains('btn-bet')) {
+                    showToast(`Нажата кнопка: ${this.textContent.trim()}`);
+                }
+            });
+        });
+
+        // Демонстрация загрузки
+        setTimeout(() => {
+            const skeletons = document.querySelectorAll('.skeleton');
+            skeletons.forEach(skeleton => {
+                skeleton.style.display = 'none';
+            });
+        }, 2000);
+    </script>
+</body>
+</html>
+

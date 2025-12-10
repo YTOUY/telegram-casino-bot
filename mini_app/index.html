@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ArbuzCasino</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lottie-web@5.12.2/build/player/lottie.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Начальный экран с загрузкой -->
+    <div id="splash-screen" class="splash-screen">
+        <div class="splash-content">
+            <div id="welcome-sticker" class="welcome-sticker"></div>
+            <div class="welcome-text">Добро пожаловать в ArbuzCasino!</div>
+            <div class="loading-container">
+                <div class="loading-circle"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Основное приложение -->
+    <div id="main-app" class="main-app hidden">
+        <!-- Контент страниц -->
+        <div id="page-content" class="page-content">
+            <!-- Страница Играть (по умолчанию) -->
+            <div id="page-play" class="page active">
+                <div class="page-header">
+                    <h1>Игры</h1>
+                </div>
+                <div class="games-grid" id="games-grid">
+                    <!-- Игры будут добавлены через JS -->
+                </div>
+            </div>
+
+            <!-- Страница Кошелек -->
+            <div id="page-wallet" class="page">
+                <div class="page-header">
+                    <h1>Кошелек</h1>
+                </div>
+                <div class="wallet-content">
+                    <div class="balance-card">
+                        <div class="balance-label">Баланс</div>
+                        <div class="balance-amount" id="balance-amount">$0.00</div>
+                        <div class="balance-ton" id="balance-ton">0.0000 TON</div>
+                    </div>
+                    <div class="wallet-actions">
+                        <button class="btn-primary btn-pulse" id="btn-deposit">Пополнить</button>
+                        <button class="btn-primary" id="btn-withdraw">Вывести</button>
+                    </div>
+                    <div id="deposit-methods" class="deposit-methods hidden">
+                        <!-- Методы пополнения -->
+                    </div>
+                    <div id="withdraw-methods" class="withdraw-methods hidden">
+                        <!-- Методы вывода -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Страница Профиль -->
+            <div id="page-profile" class="page">
+                <div class="page-header">
+                    <h1>Профиль</h1>
+                </div>
+                <div class="profile-content">
+                    <div class="profile-header">
+                        <div class="avatar-container">
+                            <img id="user-avatar" class="avatar" src="" alt="Avatar">
+                        </div>
+                        <div class="profile-info">
+                            <div class="profile-name" id="profile-name">Пользователь</div>
+                            <div class="profile-username" id="profile-username">@username</div>
+                        </div>
+                    </div>
+                    <div class="referral-section">
+                        <h2>Реферальная система</h2>
+                        <div class="referral-stats">
+                            <div class="stat-item">
+                                <div class="stat-label">Рефералов</div>
+                                <div class="stat-value" id="referral-count">0</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-label">Реферальный баланс</div>
+                                <div class="stat-value" id="referral-balance">$0.00</div>
+                            </div>
+                        </div>
+                        <div class="referral-link-container">
+                            <input type="text" id="referral-link" class="referral-link-input" readonly>
+                            <button class="btn-secondary" id="copy-referral-link">Копировать</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Страница Топ -->
+            <div id="page-top" class="page">
+                <div class="page-header">
+                    <h1>Топ</h1>
+                </div>
+                <div class="top-content">
+                    <div class="top-filters">
+                        <button class="btn-filter active" data-category="players">Игроки</button>
+                        <button class="btn-filter" data-category="chats">Чаты</button>
+                    </div>
+                    <div class="top-periods">
+                        <button class="btn-period active" data-period="day">День</button>
+                        <button class="btn-period" data-period="month">Месяц</button>
+                        <button class="btn-period" data-period="all">Все время</button>
+                    </div>
+                    <div class="top-list" id="top-list">
+                        <!-- Список топа -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Страница Настройки -->
+            <div id="page-settings" class="page">
+                <div class="page-header">
+                    <h1>Настройки</h1>
+                </div>
+                <div class="settings-content">
+                    <button class="btn-setting" id="btn-base-bet">
+                        <span class="setting-text">Базовая ставка</span>
+                        <span class="setting-value" id="base-bet-value">$1.00</span>
+                    </button>
+                    <button class="btn-setting" id="btn-create-check">
+                        <span class="setting-text">Создать чек</span>
+                    </button>
+                    <button class="btn-setting" id="btn-lotteries">
+                        <span class="setting-text">Лотереи</span>
+                    </button>
+                    <button class="btn-setting" id="btn-support">
+                        <span class="setting-text">Поддержка</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Нижняя панель навигации -->
+        <div class="bottom-nav">
+            <button class="nav-btn" data-page="settings">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"></circle>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+                <span class="nav-label">Настройки</span>
+            </button>
+            <button class="nav-btn" data-page="wallet">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+                    <line x1="1" y1="10" x2="23" y2="10"></line>
+                </svg>
+                <span class="nav-label">Кошелек</span>
+            </button>
+            <button class="nav-btn active" data-page="play">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span class="nav-label">Играть</span>
+            </button>
+            <button class="nav-btn" data-page="top">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+                    <path d="M4 22h16"></path>
+                    <path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"></path>
+                    <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"></path>
+                    <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"></path>
+                </svg>
+                <span class="nav-label">Топ</span>
+            </button>
+            <button class="nav-btn" data-page="profile">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+                <span class="nav-label">Профиль</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Модальные окна -->
+    <!-- Модальное окно базовой ставки -->
+    <div id="modal-base-bet" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Базовая ставка</h2>
+                <button class="modal-close" data-modal="modal-base-bet">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="number" id="base-bet-input" class="input-field" step="0.01" min="0.1" placeholder="Введите ставку">
+                <div class="modal-actions">
+                    <button class="btn-primary" id="save-base-bet">Сохранить</button>
+                    <button class="btn-secondary modal-close" data-modal="modal-base-bet">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно создания чека -->
+    <div id="modal-create-check" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Создать чек</h2>
+                <button class="modal-close" data-modal="modal-create-check">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="check-step" id="check-step-1">
+                    <label>Сумма на активацию:</label>
+                    <input type="number" id="check-amount" class="input-field" step="0.01" min="0.1">
+                </div>
+                <div class="check-step hidden" id="check-step-2">
+                    <label>Количество активаций:</label>
+                    <input type="number" id="check-activations" class="input-field" min="1">
+                </div>
+                <div class="check-step hidden" id="check-step-3">
+                    <label>Текст (необязательно):</label>
+                    <textarea id="check-text" class="input-field" rows="3"></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-primary hidden" id="check-next">Далее</button>
+                    <button class="btn-primary hidden" id="check-create">Создать</button>
+                    <button class="btn-secondary modal-close" data-modal="modal-create-check">Отмена</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно лотерей -->
+    <div id="modal-lotteries" class="modal">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Лотереи</h2>
+                <button class="modal-close" data-modal="modal-lotteries">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="lotteries-list">
+                    <!-- Список лотерей -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast уведомления -->
+    <div id="toast" class="toast"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
