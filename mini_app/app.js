@@ -20,13 +20,11 @@ const appState = {
 
 let API_BASE = '/api'; // По умолчанию относительный путь (для локальной разработки)
 
-// Для продакшена используем относительный путь через nginx
+// Для продакшена на Netlify используем Netlify Function как прокси
 if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    // Используем полный URL API сервера (тестовый бот на порту 8081)
-    API_BASE = 'http://141.8.198.144:8081/api';
-    
-    // ВАРИАНТ: Если используете HTTPS через nginx, замените на:
-    // API_BASE = 'https://api.ваш-домен.com/api';
+    // Мини-апп развернут на: https://arbuzcas.netlify.app
+    // Используем Netlify Function для проксирования запросов (решает проблему HTTPS -> HTTP)
+    API_BASE = '/.netlify/functions/api-proxy/api';
 }
 
 console.log('🌐 API_BASE установлен:', API_BASE, '(hostname:', window.location.hostname + ')');
@@ -34,15 +32,39 @@ console.log('🌐 API_BASE установлен:', API_BASE, '(hostname:', windo
 // Получить initData для API запросов
 function getInitData() {
     // Пробуем получить initData из разных источников
-    if (tg.initData) {
+    // Telegram WebApp API предоставляет initData как строку
+    if (tg.initData && tg.initData.length > 0) {
+        console.log('✅ Используется tg.initData');
         return tg.initData;
     }
+    
     // Если initData недоступен, пробуем получить из initDataUnsafe
-    if (tg.initDataUnsafe && tg.initDataUnsafe.query_id) {
-        // Формируем строку initData из initDataUnsafe (упрощенная версия)
-        // В реальности нужно использовать правильный формат Telegram
-        console.warn('⚠️ Используется initDataUnsafe вместо initData');
+    // Это может произойти в некоторых случаях (например, в тестовом режиме)
+    if (tg.initDataUnsafe) {
+        console.warn('⚠️ initData недоступен, используется initDataUnsafe');
+        // В реальном приложении нужно формировать правильную строку initData
+        // из initDataUnsafe, но для тестирования можно попробовать пустую строку
+        // или сформировать базовую строку
+        if (tg.initDataUnsafe.query_id) {
+            // Формируем минимальную строку initData (неполная, но может работать для теста)
+            const params = [];
+            if (tg.initDataUnsafe.user) {
+                params.push(`user=${encodeURIComponent(JSON.stringify(tg.initDataUnsafe.user))}`);
+            }
+            if (tg.initDataUnsafe.query_id) {
+                params.push(`query_id=${tg.initDataUnsafe.query_id}`);
+            }
+            if (tg.initDataUnsafe.auth_date) {
+                params.push(`auth_date=${tg.initDataUnsafe.auth_date}`);
+            }
+            if (tg.initDataUnsafe.hash) {
+                params.push(`hash=${tg.initDataUnsafe.hash}`);
+            }
+            return params.join('&');
+        }
     }
+    
+    console.error('❌ initData недоступен!');
     return '';
 }
 
@@ -382,21 +404,35 @@ async function loadUserData() {
     try {
         // Убеждаемся, что initData передается
         const initData = getInitData();
-        if (!initData) {
-            console.error('❌ initData отсутствует! Пробуем использовать initDataUnsafe...');
-            // Если initData недоступен, пробуем использовать initDataUnsafe для формирования запроса
-            // Но это может не работать для проверки подписи на сервере
-        }
         
         console.log('📡 Запрос данных пользователя...', {
+            API_BASE: API_BASE,
             hasInitData: !!initData,
-            userId: appState.user?.id
+            initDataLength: initData ? initData.length : 0,
+            userId: appState.user?.id,
+            hostname: window.location.hostname
         });
         
-        const response = await fetch(`${API_BASE}/user`, {
+        if (!initData) {
+            console.warn('⚠️ initData отсутствует! Запрос может не пройти авторизацию.');
+        }
+        
+        const requestUrl = `${API_BASE}/user`;
+        console.log('🔗 URL запроса:', requestUrl);
+        
+        const response = await fetch(requestUrl, {
+            method: 'GET',
             headers: {
-                'X-Telegram-Init-Data': initData || ''
+                'X-Telegram-Init-Data': initData || '',
+                'Content-Type': 'application/json'
             }
+        });
+        
+        console.log('📥 Ответ получен:', {
+            status: response.status,
+            statusText: response.statusText,
+            ok: response.ok,
+            headers: Object.fromEntries(response.headers.entries())
         });
         
         if (response.ok) {
@@ -418,16 +454,48 @@ async function loadUserData() {
             appState.baseBet = newBaseBet;
             updateUI();
         } else {
-            const errorData = await response.json().catch(() => ({}));
-            console.error('❌ Ошибка загрузки данных пользователя:', response.status, errorData);
+            let errorData = {};
+            try {
+                const text = await response.text();
+                errorData = text ? JSON.parse(text) : {};
+            } catch (e) {
+                console.error('Ошибка парсинга ответа:', e);
+            }
+            
+            console.error('❌ Ошибка загрузки данных пользователя:', {
+                status: response.status,
+                statusText: response.statusText,
+                error: errorData,
+                url: requestUrl
+            });
+            
             // Показываем ошибку пользователю только если это не 401 (неавторизован)
             if (response.status !== 401) {
-                showToast('Ошибка загрузки баланса');
+                showToast(`Ошибка загрузки баланса (${response.status})`);
+            } else {
+                console.warn('⚠️ 401 Unauthorized - возможно проблема с initData или авторизацией');
             }
         }
     } catch (error) {
-        console.error('❌ Ошибка загрузки данных пользователя:', error);
-        showToast('Ошибка подключения к серверу');
+        console.error('❌ Критическая ошибка загрузки данных пользователя:', {
+            error: error,
+            message: error.message,
+            stack: error.stack,
+            API_BASE: API_BASE,
+            name: error.name
+        });
+        
+        // Более детальное сообщение об ошибке
+        let errorMessage = 'Ошибка подключения к серверу';
+        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+            errorMessage = 'Не удалось подключиться к серверу. Проверьте настройки API.';
+        } else if (error.name === 'AbortError') {
+            errorMessage = 'Таймаут подключения к серверу';
+        } else {
+            errorMessage = `Ошибка: ${error.message}`;
+        }
+        
+        showToast(errorMessage);
     }
 }
 
