@@ -831,10 +831,39 @@ body {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
-    max-height: 500px;
+    max-height: 400px;
     overflow-y: auto;
+    overflow-x: hidden;
     padding-right: 5px;
     margin-bottom: 20px;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Отображение результата игры с кубиками/эмодзи */
+.result-display {
+    white-space: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    text-align: center;
+    word-break: keep-all;
+    display: inline-block;
+    width: 100%;
+    max-width: 100%;
+}
+
+.result-display::-webkit-scrollbar {
+    height: 4px;
+}
+
+.result-display::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+    border-radius: 10px;
+}
+
+.result-display::-webkit-scrollbar-thumb {
+    background: var(--accent-green);
+    border-radius: 10px;
 }
 
 /* Кнопки режимов игры */

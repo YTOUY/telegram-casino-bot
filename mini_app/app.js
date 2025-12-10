@@ -749,12 +749,14 @@ function showGamePage(gameId) {
     
     // Сбрасываем состояние
     appState.selectedGameMode = null;
+    const startBtnContainer = document.getElementById('start-game-btn-container');
+    if (startBtnContainer) {
+        startBtnContainer.classList.add('hidden');
+    }
+    
+    // Инициализируем кнопку "Начать игру"
     let startBtn = document.getElementById('start-game-btn');
     if (startBtn) {
-        startBtn.disabled = true;
-        startBtn.style.opacity = '0.5';
-        startBtn.style.cursor = 'not-allowed';
-        
         // Удаляем старые обработчики, заменяя кнопку
         const newStartBtn = startBtn.cloneNode(true);
         startBtn.parentNode.replaceChild(newStartBtn, startBtn);
@@ -800,12 +802,9 @@ function showGamePage(gameId) {
             btn.classList.add('active');
             appState.selectedGameMode = btn.dataset.mode;
             
-            // Обновляем кнопку "Начать игру" (получаем актуальную ссылку)
-            const currentStartBtn = document.getElementById('start-game-btn');
-            if (currentStartBtn) {
-                currentStartBtn.disabled = false;
-                currentStartBtn.style.opacity = '1';
-                currentStartBtn.style.cursor = 'pointer';
+            // Показываем кнопку "Начать игру" над списком режимов
+            if (startBtnContainer) {
+                startBtnContainer.classList.remove('hidden');
             }
         });
     });
@@ -1054,7 +1053,7 @@ async function showGameResultModal(result, stickerName) {
                 <div style="font-size: 24px; margin: 20px 0 10px; color: ${result.win > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">
                     ${result.win > 0 ? `Выигрыш: $${result.win.toFixed(2)}` : 'Проигрыш'}
                 </div>
-                <div style="font-size: 16px; color: var(--text-secondary);">
+                <div class="result-display" style="font-size: 16px; color: var(--text-secondary); white-space: nowrap; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; padding: 10px 0;">
                     Результат: ${result.result}
                 </div>
                 <div style="font-size: 16px; color: var(--text-secondary); margin-top: 5px; margin-bottom: 20px;">
