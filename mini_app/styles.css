@@ -829,8 +829,8 @@ body {
 /* Контейнер режимов игры */
 .game-modes-container {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
     max-height: 500px;
     overflow-y: auto;
     padding-right: 5px;
@@ -841,10 +841,10 @@ body {
 .game-mode-btn {
     background: var(--bg-card);
     border: 2px solid var(--border-color);
-    border-radius: 12px;
-    padding: 16px 12px;
+    border-radius: 10px;
+    padding: 10px 6px;
     color: var(--text-primary);
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.3s ease;
@@ -853,8 +853,8 @@ body {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    min-height: 70px;
+    gap: 3px;
+    min-height: 55px;
     position: relative;
     overflow: hidden;
 }
@@ -893,17 +893,17 @@ body {
 }
 
 .mode-name {
-    font-size: 14px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-primary);
-    line-height: 1.3;
+    line-height: 1.2;
 }
 
 .mode-multiplier {
-    font-size: 16px;
+    font-size: 13px;
     font-weight: 700;
     color: var(--accent-green);
-    margin-top: 2px;
+    margin-top: 1px;
 }
 
 .game-mode-btn.active .mode-name {
@@ -1304,22 +1304,22 @@ body {
     }
     
     .game-modes-container {
-        grid-template-columns: 1fr;
-        gap: 10px;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
     }
     
     .game-mode-btn {
-        padding: 14px 10px;
-        font-size: 13px;
-        min-height: 65px;
+        padding: 10px 6px;
+        font-size: 11px;
+        min-height: 50px;
     }
     
     .mode-name {
-        font-size: 13px;
+        font-size: 10px;
     }
     
     .mode-multiplier {
-        font-size: 15px;
+        font-size: 12px;
     }
 }
 
