@@ -1149,6 +1149,17 @@ function getLocalStickerPath(stickerName) {
 async function loadStickerForElement(element, stickerName) {
     if (!element || !stickerName) return;
     
+    // Определяем размер стикера в зависимости от типа
+    const isResultSticker = element.classList.contains('result-sticker') || element.classList.contains('win-lose-sticker');
+    const stickerSize = isResultSticker ? '100px' : '150px';
+    
+    // Устанавливаем размер контейнера
+    if (isResultSticker) {
+        element.style.width = stickerSize;
+        element.style.height = stickerSize;
+        element.style.margin = '0 auto';
+    }
+    
     // Сначала пробуем загрузить локальный файл из папки stickers
     const localPath = getLocalStickerPath(stickerName);
     if (localPath) {
@@ -1209,25 +1220,25 @@ async function loadStickerForElement(element, stickerName) {
                     const img = document.createElement('img');
                     img.src = stickerUrl;
                     img.alt = 'Sticker';
-                    img.style.width = '150px';
-                    img.style.height = '150px';
+                    img.style.width = stickerSize;
+                    img.style.height = stickerSize;
                     img.style.objectFit = 'contain';
                     img.onerror = () => {
-                        element.innerHTML = '<div style="width: 150px; height: 150px; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>';
+                        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
                     };
                     element.innerHTML = '';
                     element.appendChild(img);
                 }
             } else {
-                element.innerHTML = '<div style="width: 150px; height: 150px; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>';
+                element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
             }
         } else {
             // Если стикер не найден, показываем fallback
-            element.innerHTML = '<div style="width: 150px; height: 150px; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>';
+            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
         }
     } catch (error) {
         console.error(`Ошибка загрузки стикера ${stickerName}:`, error);
-        element.innerHTML = '<div style="width: 150px; height: 150px; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>';
+        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
     }
 }
 
@@ -1765,10 +1776,10 @@ function displayGifts(gifts, isWithdraw) {
         // Определяем путь к изображению подарка из папки nft/png
         const fileName = giftNameToFileName(gift.name);
         
-        // Для Netlify используем относительный путь от корня сайта
+        // Для Netlify используем абсолютный путь от корня сайта
         // Файлы находятся в папке nft/png/ в корне мини-аппа
-        // На Netlify путь должен быть просто 'nft/png/...' или '/nft/png/...'
-        const giftImagePathPng = `nft/png/${fileName}.png`;
+        // На Netlify путь должен быть '/nft/png/...' (абсолютный путь)
+        const giftImagePathPng = `/nft/png/${fileName}.png`;
         
         // Используем ТОЛЬКО локальные PNG файлы из папки nft/png
         const imageUrl = giftImagePathPng;
