@@ -722,6 +722,8 @@ function showGamePage(gameId) {
     
     // Сохраняем текущий gameId для использования в обработчиках
     appState.currentGameId = gameId;
+    appState.selectedGameMode = null;
+    appState.selectedBet = appState.baseBet;
     
     // Обновляем заголовок страницы
     const gamePageTitle = document.getElementById('game-page-title');
@@ -729,13 +731,158 @@ function showGamePage(gameId) {
         gamePageTitle.textContent = gameName;
     }
     
-    // Устанавливаем значение ставки
+    // Инициализируем шаг 1: Выбор ставки
+    initBetStep();
+    
+    // Инициализируем шаг 2: Выбор режима
+    initModesStep(gameId);
+    
+    // Инициализируем шаг 3: Подтверждение
+    initStartStep(gameId);
+    
+    // Обработчик кнопки "Назад"
+    const backBtn = document.getElementById('btn-back-to-games');
+    if (backBtn) {
+        backBtn.onclick = () => {
+            switchPage('play');
+        };
+    }
+    
+    // Показываем первый шаг
+    showGameStep('bet');
+    
+    // Переключаемся на страницу игры
+    switchPage('game');
+}
+
+// Показать конкретный шаг игры
+function showGameStep(stepName) {
+    const steps = ['bet', 'modes', 'start'];
+    steps.forEach(step => {
+        const stepEl = document.getElementById(`game-step-${step}`);
+        if (stepEl) {
+            if (step === stepName) {
+                stepEl.classList.remove('hidden');
+                stepEl.classList.add('active');
+            } else {
+                stepEl.classList.add('hidden');
+                stepEl.classList.remove('active');
+            }
+        }
+    });
+}
+
+// Инициализация шага выбора ставки
+function initBetStep() {
     const betInput = document.getElementById('game-bet-input');
     if (betInput) {
         betInput.value = appState.baseBet.toFixed(2);
+        
+        // Обновляем значение базовой ставки в кнопке
+        const betBaseValue = document.getElementById('bet-base-value');
+        if (betBaseValue) {
+            betBaseValue.textContent = `$${appState.baseBet.toFixed(2)}`;
+        }
+        
+        // Обработчик изменения ставки
+        betInput.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value) || 0;
+            if (value > 0) {
+                appState.selectedBet = Math.min(Math.max(value, 0.1), 30);
+                e.target.value = appState.selectedBet.toFixed(2);
+            }
+            updateBetQuickButtons();
+        });
     }
     
-    // Получаем доступные режимы для игры
+    // Кнопки быстрого выбора ставки
+    const betBtnMin = document.getElementById('bet-btn-min');
+    const betBtnBase = document.getElementById('bet-btn-base');
+    const betBtnMax = document.getElementById('bet-btn-max');
+    
+    if (betBtnMin) {
+        betBtnMin.addEventListener('click', () => {
+            setBetValue(0.1);
+        });
+    }
+    
+    if (betBtnBase) {
+        betBtnBase.addEventListener('click', () => {
+            setBetValue(appState.baseBet);
+        });
+    }
+    
+    if (betBtnMax) {
+        betBtnMax.addEventListener('click', () => {
+            setBetValue(30);
+        });
+    }
+    
+    // Кнопка "Далее" к выбору режима
+    const btnNextToModes = document.getElementById('btn-next-to-modes');
+    if (btnNextToModes) {
+        btnNextToModes.addEventListener('click', () => {
+            const betInput = document.getElementById('game-bet-input');
+            const bet = parseFloat(betInput?.value || appState.baseBet);
+            
+            if (isNaN(bet) || bet < 0.1) {
+                showToast('Минимальная ставка: $0.10');
+                return;
+            }
+            
+            if (bet > 30) {
+                showToast('Максимальная ставка: $30.00');
+                return;
+            }
+            
+            // Проверяем баланс
+            if (appState.balance < bet) {
+                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
+                return;
+            }
+            
+            appState.selectedBet = bet;
+            showGameStep('modes');
+        });
+    }
+    
+    updateBetQuickButtons();
+}
+
+// Установить значение ставки
+function setBetValue(value) {
+    appState.selectedBet = Math.min(Math.max(value, 0.1), 30);
+    const betInput = document.getElementById('game-bet-input');
+    if (betInput) {
+        betInput.value = appState.selectedBet.toFixed(2);
+    }
+    updateBetQuickButtons();
+}
+
+// Обновить состояние кнопок быстрого выбора ставки
+function updateBetQuickButtons() {
+    const betInput = document.getElementById('game-bet-input');
+    const currentBet = parseFloat(betInput?.value || appState.baseBet);
+    
+    const betBtnMin = document.getElementById('bet-btn-min');
+    const betBtnBase = document.getElementById('bet-btn-base');
+    const betBtnMax = document.getElementById('bet-btn-max');
+    
+    [betBtnMin, betBtnBase, betBtnMax].forEach(btn => {
+        if (btn) btn.classList.remove('active');
+    });
+    
+    if (Math.abs(currentBet - 0.1) < 0.01 && betBtnMin) {
+        betBtnMin.classList.add('active');
+    } else if (Math.abs(currentBet - appState.baseBet) < 0.01 && betBtnBase) {
+        betBtnBase.classList.add('active');
+    } else if (Math.abs(currentBet - 30) < 0.01 && betBtnMax) {
+        betBtnMax.classList.add('active');
+    }
+}
+
+// Инициализация шага выбора режима
+function initModesStep(gameId) {
     const modes = getGameModes(gameId);
     const modesContainer = document.getElementById('game-modes-container');
     if (modesContainer) {
@@ -745,48 +892,6 @@ function showGamePage(gameId) {
                 <span class="mode-multiplier">x${mode.name.split(' x')[1] || ''}</span>
             </button>
         `).join('');
-    }
-    
-    // Сбрасываем состояние
-    appState.selectedGameMode = null;
-    const startBtnContainer = document.getElementById('start-game-btn-container');
-    if (startBtnContainer) {
-        startBtnContainer.classList.add('hidden');
-    }
-    
-    // Инициализируем кнопку "Начать игру"
-    let startBtn = document.getElementById('start-game-btn');
-    if (startBtn) {
-        // Удаляем старые обработчики, заменяя кнопку
-        const newStartBtn = startBtn.cloneNode(true);
-        startBtn.parentNode.replaceChild(newStartBtn, startBtn);
-        startBtn = newStartBtn; // Обновляем ссылку на новую кнопку
-        
-        // Добавляем обработчик запуска игры
-        startBtn.addEventListener('click', async () => {
-            if (!appState.selectedGameMode) {
-                showToast('Выберите режим игры');
-                return;
-            }
-            
-            // Получаем актуальное значение ставки из поля ввода
-            const currentBetInput = document.getElementById('game-bet-input');
-            const bet = parseFloat(currentBetInput?.value || appState.baseBet);
-            
-            if (isNaN(bet) || bet < 0.1) {
-                showToast('Минимальная ставка: $0.10');
-                return;
-            }
-            
-            // Проверяем баланс перед запуском
-            if (appState.balance < bet) {
-                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
-                return;
-            }
-            
-            // Запускаем игру
-            await launchGame(gameId, bet, appState.selectedGameMode);
-        });
     }
     
     // Обработчики выбора режима
@@ -802,23 +907,101 @@ function showGamePage(gameId) {
             btn.classList.add('active');
             appState.selectedGameMode = btn.dataset.mode;
             
-            // Показываем кнопку "Начать игру" над списком режимов
-            if (startBtnContainer) {
-                startBtnContainer.classList.remove('hidden');
+            // Активируем кнопку "Далее"
+            const btnNextToStart = document.getElementById('btn-next-to-start');
+            if (btnNextToStart) {
+                btnNextToStart.disabled = false;
             }
         });
     });
     
-    // Обработчик кнопки "Назад"
-    const backBtn = document.getElementById('btn-back-to-games');
-    if (backBtn) {
-        backBtn.onclick = () => {
-            switchPage('play');
-        };
+    // Кнопка "Назад" к выбору ставки
+    const btnBackToBet = document.getElementById('btn-back-to-bet');
+    if (btnBackToBet) {
+        btnBackToBet.addEventListener('click', () => {
+            showGameStep('bet');
+        });
     }
     
-    // Переключаемся на страницу игры
-    switchPage('game');
+    // Кнопка "Далее" к подтверждению
+    const btnNextToStart = document.getElementById('btn-next-to-start');
+    if (btnNextToStart) {
+        btnNextToStart.addEventListener('click', () => {
+            if (!appState.selectedGameMode) {
+                showToast('Выберите режим игры');
+                return;
+            }
+            updateStartStep();
+            showGameStep('start');
+        });
+    }
+}
+
+// Инициализация шага подтверждения и запуска
+function initStartStep(gameId) {
+    const startBtn = document.getElementById('start-game-btn');
+    if (startBtn) {
+        // Удаляем старые обработчики, заменяя кнопку
+        const newStartBtn = startBtn.cloneNode(true);
+        startBtn.parentNode.replaceChild(newStartBtn, startBtn);
+        
+        // Добавляем обработчик запуска игры
+        newStartBtn.addEventListener('click', async () => {
+            if (!appState.selectedGameMode) {
+                showToast('Выберите режим игры');
+                return;
+            }
+            
+            const bet = appState.selectedBet;
+            
+            if (isNaN(bet) || bet < 0.1) {
+                showToast('Минимальная ставка: $0.10');
+                return;
+            }
+            
+            if (bet > 30) {
+                showToast('Максимальная ставка: $30.00');
+                return;
+            }
+            
+            // Проверяем баланс перед запуском
+            if (appState.balance < bet) {
+                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
+                return;
+            }
+            
+            // Запускаем игру
+            await launchGame(gameId, bet, appState.selectedGameMode);
+        });
+    }
+    
+    // Кнопка "Назад" к выбору режима
+    const btnBackToModes = document.getElementById('btn-back-to-modes');
+    if (btnBackToModes) {
+        btnBackToModes.addEventListener('click', () => {
+            showGameStep('modes');
+        });
+    }
+}
+
+// Обновить шаг подтверждения
+function updateStartStep() {
+    const summaryBet = document.getElementById('summary-bet');
+    const summaryMode = document.getElementById('summary-mode');
+    
+    if (summaryBet) {
+        summaryBet.textContent = `$${appState.selectedBet.toFixed(2)}`;
+    }
+    
+    if (summaryMode) {
+        const modes = getGameModes(appState.currentGameId);
+        const selectedMode = modes.find(m => m.value === appState.selectedGameMode);
+        if (selectedMode) {
+            summaryMode.textContent = selectedMode.name;
+        } else {
+            summaryMode.textContent = '-';
+        }
+    }
 }
 
 // Получить доступные режимы для игры (как в боте)

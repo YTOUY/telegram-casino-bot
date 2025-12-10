@@ -811,6 +811,96 @@ body {
     padding: 20px;
 }
 
+/* Поэтапный процесс игры */
+.game-step {
+    display: block;
+    animation: fadeIn 0.3s ease;
+}
+
+.game-step.hidden {
+    display: none;
+}
+
+/* Кнопки быстрого выбора ставки */
+.bet-quick-buttons {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.bet-quick-btn {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px 8px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+.bet-quick-btn span {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.bet-quick-btn:hover {
+    border-color: var(--accent-green);
+    background: rgba(0, 255, 136, 0.1);
+    transform: translateY(-2px);
+}
+
+.bet-quick-btn.active {
+    border-color: var(--accent-green);
+    background: linear-gradient(135deg, rgba(0, 255, 136, 0.2) 0%, rgba(0, 204, 106, 0.2) 100%);
+    box-shadow: 0 0 15px rgba(0, 255, 136, 0.3);
+}
+
+.bet-quick-btn.active span {
+    color: var(--accent-green);
+}
+
+/* Сводка перед запуском */
+.game-summary {
+    background: var(--bg-card);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.summary-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.summary-item:last-child {
+    border-bottom: none;
+}
+
+.summary-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.summary-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent-green);
+}
+
 .btn-back {
     background: none;
     border: none;
