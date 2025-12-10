@@ -293,11 +293,12 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
                 
                 if game_id in MINI_APP_GAMES:
                     MINI_APP_GAMES[game_id]['status'] = 'completed'
-                    MINI_APP_GAMES[game_id]['result'] = game_result
+                    MINI_APP_GAMES[game_id]['result'] = game_result  # Сумма для отображения
+                    MINI_APP_GAMES[game_id]['throws'] = throws  # ВАЖНО: Сохраняем список бросков для стикеров!
                     MINI_APP_GAMES[game_id]['win'] = win
                     MINI_APP_GAMES[game_id]['new_balance'] = new_balance
                     MINI_APP_GAMES[game_id]['game_type'] = game_type
-                    logger.info(f"✅ Результат игры из мини-аппа сохранен: game_id={game_id}, result={game_result}, win={win}")
+                    logger.info(f"✅ Результат игры из мини-аппа сохранен: game_id={game_id}, result={game_result}, throws={throws}, win={win}")
             except Exception as e:
                 logger.error(f"Ошибка сохранения результата для мини-аппа: {e}", exc_info=True)
         
