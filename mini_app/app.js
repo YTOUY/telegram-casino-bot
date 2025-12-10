@@ -749,11 +749,42 @@ function showGamePage(gameId) {
     
     // Сбрасываем состояние
     appState.selectedGameMode = null;
-    const startBtn = document.getElementById('start-game-btn');
+    let startBtn = document.getElementById('start-game-btn');
     if (startBtn) {
         startBtn.disabled = true;
         startBtn.style.opacity = '0.5';
         startBtn.style.cursor = 'not-allowed';
+        
+        // Удаляем старые обработчики, заменяя кнопку
+        const newStartBtn = startBtn.cloneNode(true);
+        startBtn.parentNode.replaceChild(newStartBtn, startBtn);
+        startBtn = newStartBtn; // Обновляем ссылку на новую кнопку
+        
+        // Добавляем обработчик запуска игры
+        startBtn.addEventListener('click', async () => {
+            if (!appState.selectedGameMode) {
+                showToast('Выберите режим игры');
+                return;
+            }
+            
+            // Получаем актуальное значение ставки из поля ввода
+            const currentBetInput = document.getElementById('game-bet-input');
+            const bet = parseFloat(currentBetInput?.value || appState.baseBet);
+            
+            if (isNaN(bet) || bet < 0.1) {
+                showToast('Минимальная ставка: $0.10');
+                return;
+            }
+            
+            // Проверяем баланс перед запуском
+            if (appState.balance < bet) {
+                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
+                return;
+            }
+            
+            // Запускаем игру
+            await launchGame(gameId, bet, appState.selectedGameMode);
+        });
     }
     
     // Обработчики выбора режима
@@ -769,43 +800,15 @@ function showGamePage(gameId) {
             btn.classList.add('active');
             appState.selectedGameMode = btn.dataset.mode;
             
-            if (startBtn) {
-                startBtn.disabled = false;
-                startBtn.style.opacity = '1';
-                startBtn.style.cursor = 'pointer';
+            // Обновляем кнопку "Начать игру" (получаем актуальную ссылку)
+            const currentStartBtn = document.getElementById('start-game-btn');
+            if (currentStartBtn) {
+                currentStartBtn.disabled = false;
+                currentStartBtn.style.opacity = '1';
+                currentStartBtn.style.cursor = 'pointer';
             }
         });
     });
-    
-    // Обработчик запуска игры
-    if (startBtn) {
-        // Удаляем старые обработчики
-        const newStartBtn = startBtn.cloneNode(true);
-        startBtn.parentNode.replaceChild(newStartBtn, startBtn);
-        
-        newStartBtn.addEventListener('click', async () => {
-            if (!appState.selectedGameMode) {
-                showToast('Выберите режим игры');
-                return;
-            }
-            
-            const bet = parseFloat(betInput?.value || appState.baseBet);
-            
-            if (bet < 0.1) {
-                showToast('Минимальная ставка: $0.10');
-                return;
-            }
-            
-            // Проверяем баланс перед запуском
-            if (appState.balance < bet) {
-                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
-                return;
-            }
-            
-            // Запускаем игру
-            await launchGame(gameId, bet, appState.selectedGameMode);
-        });
-    }
     
     // Обработчик кнопки "Назад"
     const backBtn = document.getElementById('btn-back-to-games');
