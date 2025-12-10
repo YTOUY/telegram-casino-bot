@@ -443,14 +443,18 @@ async function loadUserData() {
             // Если ответ не JSON, читаем как текст для диагностики
             const text = await response.text();
             console.error('❌ Ответ не JSON! Content-Type:', contentType);
-            console.error('❌ Первые 200 символов ответа:', text.substring(0, 200));
+            console.error('❌ Первые 500 символов ответа:', text.substring(0, 500));
+            console.error('❌ URL запроса:', requestUrl);
             
             // Если это HTML (обычно означает что Netlify Function не работает)
-            if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<!doctype')) {
-                throw new Error('Netlify Function не работает. Получен HTML вместо JSON. Проверьте развертывание функции.');
+            if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<!doctype') || text.includes('<html')) {
+                const errorMsg = 'Netlify Function не работает. Получен HTML вместо JSON. ' +
+                    'Проверьте: 1) Развертывание функции на Netlify, 2) Логи функций: https://app.netlify.com/projects/arbuzcas/logs/functions';
+                console.error('❌', errorMsg);
+                throw new Error(errorMsg);
             }
             
-            throw new Error(`Ожидался JSON, получен ${contentType || 'неизвестный тип'}`);
+            throw new Error(`Ожидался JSON, получен ${contentType || 'неизвестный тип'}. Ответ: ${text.substring(0, 100)}`);
         }
         
         if (response.ok) {
