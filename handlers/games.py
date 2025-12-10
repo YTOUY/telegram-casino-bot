@@ -422,11 +422,15 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
         except Exception as e:
             logger.error(f"❌ Ошибка при отправке сообщения с результатом: {e}", exc_info=True)
         
-        # Отправляем стикеры для каждого эмодзи результата в один ряд
-        try:
-            await send_result_stickers(bot, chat_id, game_type, throws, original_message_id)
-        except Exception as e:
-            logger.error(f"❌ Ошибка при отправке стикеров результата: {e}", exc_info=True)
+        # Отправляем стикеры для каждого эмодзи результата в один ряд (только если несколько бросков)
+        if len(throws) > 1:
+            try:
+                logger.info(f"🎨 Отправляю стикеры для {len(throws)} результатов: {throws}")
+                await send_result_stickers(bot, chat_id, game_type, throws, original_message_id)
+            except Exception as e:
+                logger.error(f"❌ Ошибка при отправке стикеров результата: {e}", exc_info=True)
+        else:
+            logger.info(f"ℹ️ Пропускаю отправку стикеров: только 1 бросок ({throws})")
         
         # Сохраняем последнюю игру перед очисткой состояния (сохраняем custom_multiplier для ракетки)
         last_game_data = {
@@ -490,8 +494,14 @@ def get_sticker_name_for_result(game_type: str, result: int) -> str:
 
 async def send_result_stickers(bot, chat_id: int, game_type: str, throws: list, original_message_id: int = None):
     """Отправить стикеры для каждого эмодзи результата в один ряд"""
+    logger.info(f"🎨 send_result_stickers вызвана: game_type={game_type}, throws={throws}, chat_id={chat_id}")
+    
     if not throws or len(throws) == 0:
         logger.warning("⚠️ Нет результатов для отправки стикеров")
+        return
+    
+    if len(throws) == 1:
+        logger.info(f"ℹ️ Только 1 результат, стикеры не отправляются")
         return
     
     try:
@@ -501,46 +511,51 @@ async def send_result_stickers(bot, chat_id: int, game_type: str, throws: list, 
             try:
                 chat = await bot.get_chat(chat_id)
                 is_group = chat.type in ['group', 'supergroup']
+                logger.info(f"📱 Тип чата: {'группа' if is_group else 'личный'}")
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось определить тип чата: {e}")
         
         # Получаем стикеры для каждого результата
         stickers_to_send = []
-        for throw_result in throws:
+        for idx, throw_result in enumerate(throws):
             sticker_name = get_sticker_name_for_result(game_type, throw_result)
+            logger.info(f"🔍 Ищу стикер для результата {throw_result} (бросок {idx+1}): {sticker_name}")
             sticker = await db.get_sticker(sticker_name)
             if sticker:
                 stickers_to_send.append(sticker['file_id'])
-                logger.info(f"✅ Найден стикер для {sticker_name}: {sticker['file_id']}")
+                logger.info(f"✅ Найден стикер для {sticker_name}: {sticker['file_id'][:20]}...")
             else:
                 logger.warning(f"⚠️ Стикер {sticker_name} не найден в базе данных")
         
         # Отправляем все стикеры быстро последовательно, чтобы они были в один ряд
         if stickers_to_send:
-            logger.info(f"📤 Отправляю {len(stickers_to_send)} стикеров в один ряд")
+            logger.info(f"📤 Отправляю {len(stickers_to_send)} стикеров в один ряд для игры {game_type}")
             for i, sticker_file_id in enumerate(stickers_to_send):
                 try:
+                    logger.info(f"📤 Отправляю стикер {i+1}/{len(stickers_to_send)}")
                     if is_group and original_message_id and i == 0:
                         # Первый стикер в группе - отвечаем на исходное сообщение
-                        await bot.send_sticker(
+                        sent_message = await bot.send_sticker(
                             chat_id=chat_id,
                             sticker=sticker_file_id,
                             reply_to_message_id=original_message_id
                         )
+                        logger.info(f"✅ Стикер {i+1} отправлен в группе с reply_to_message_id={original_message_id}, message_id={sent_message.message_id}")
                     else:
                         # Остальные стикеры - отправляем без reply, чтобы они были рядом
-                        await bot.send_sticker(
+                        sent_message = await bot.send_sticker(
                             chat_id=chat_id,
                             sticker=sticker_file_id
                         )
+                        logger.info(f"✅ Стикер {i+1} отправлен, message_id={sent_message.message_id}")
                     # Минимальная задержка между стикерами для отправки в один ряд
                     if i < len(stickers_to_send) - 1:
                         await asyncio.sleep(0.1)
                 except Exception as e:
-                    logger.error(f"❌ Ошибка при отправке стикера {i+1}/{len(stickers_to_send)}: {e}")
-            logger.info(f"✅ Все стикеры отправлены успешно")
+                    logger.error(f"❌ Ошибка при отправке стикера {i+1}/{len(stickers_to_send)}: {e}", exc_info=True)
+            logger.info(f"✅ Все {len(stickers_to_send)} стикеров отправлены успешно")
         else:
-            logger.warning("⚠️ Нет стикеров для отправки")
+            logger.warning(f"⚠️ Нет стикеров для отправки (найдено 0 из {len(throws)} результатов)")
     except Exception as e:
         logger.error(f"❌ Ошибка в send_result_stickers: {e}", exc_info=True)
 
