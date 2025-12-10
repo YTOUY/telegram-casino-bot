@@ -435,6 +435,24 @@ async function loadUserData() {
             headers: Object.fromEntries(response.headers.entries())
         });
         
+        // Проверяем Content-Type перед парсингом
+        const contentType = response.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+        
+        if (!isJson) {
+            // Если ответ не JSON, читаем как текст для диагностики
+            const text = await response.text();
+            console.error('❌ Ответ не JSON! Content-Type:', contentType);
+            console.error('❌ Первые 200 символов ответа:', text.substring(0, 200));
+            
+            // Если это HTML (обычно означает что Netlify Function не работает)
+            if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<!doctype')) {
+                throw new Error('Netlify Function не работает. Получен HTML вместо JSON. Проверьте развертывание функции.');
+            }
+            
+            throw new Error(`Ожидался JSON, получен ${contentType || 'неизвестный тип'}`);
+        }
+        
         if (response.ok) {
             const data = await response.json();
             const newBalance = parseFloat(data.balance) || 0;
