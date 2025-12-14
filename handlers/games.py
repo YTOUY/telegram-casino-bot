@@ -102,13 +102,22 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
         # Используем реальные результаты из состояния
         # ВАЖНО: throws должен содержать список результатов каждого броска (например, [1, 1, 1]), а НЕ сумму!
         throws = state.get("throws", [])
-        logger.info(f"🎲 Фактические результаты бросков (throws): {throws}, тип: {type(throws)}, длина: {len(throws) if throws else 0}")
+        logger.info(f"🎲 Фактические результаты бросков (throws): {throws}, тип: {type(throws)}, длина: {len(throws) if isinstance(throws, list) else 'N/A'}")
         
         # Проверяем, что throws - это список, а не число
         if not isinstance(throws, list):
-            logger.error(f"❌ ОШИБКА: throws не является списком! Значение: {throws}, тип: {type(throws)}")
-            throws = [throws] if throws else []
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: throws не является списком! Значение: {throws}, тип: {type(throws)}")
+            # Если это число (старая версия), пытаемся восстановить из required_throws
+            if isinstance(throws, (int, float)) and throws > 0:
+                logger.warning(f"⚠️ throws это число {throws}, но мы не можем восстановить массив бросков!")
+                throws = []  # Оставляем пустым, так как не можем восстановить
+            else:
+                throws = [throws] if throws else []
             logger.warning(f"⚠️ Преобразовано в список: {throws}")
+        
+        # Дополнительная проверка: если throws пустой, это критическая ошибка
+        if not throws or len(throws) == 0:
+            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: throws пустой! required_throws={required_throws}, state={state}")
         
         # Получаем конфигурацию игры
         config = GAME_CONFIGS.get(game_type)
@@ -283,7 +292,10 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
             game_result = first_result if len(throws) == 1 else sum(throws)
         await db.add_game(user_id, game_type, bet, game_result, win, bet_type, currency=currency)
         
-        # Если игра из мини-аппа, сохраняем результат для API
+        # ВАЖНО: Если игра из мини-аппа, сохраняем результат для API ДО удаления состояния
+        # Это гарантирует, что throws будет доступен в check_mini_app_game_result
+        logger.info(f"🔍 Проверка мини-аппа: mini_app={state.get('mini_app')}, game_id={state.get('game_id')}, throws={throws}")
+        
         if state.get("mini_app") and state.get("game_id"):
             try:
                 from api_server import MINI_APP_GAMES
@@ -291,16 +303,33 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
                 user = await db.get_user(user_id)
                 new_balance = user.get('balance', 0.0) if user else 0.0
                 
+                # ВАЖНО: Создаем копию throws как новый список, чтобы гарантировать что это список
+                # НИКОГДА не используем game_result (сумму) как fallback для throws!
+                throws_copy = []
+                if isinstance(throws, list) and len(throws) > 0:
+                    throws_copy = list(throws)  # Создаем новый список из throws
+                    logger.info(f"💾 Сохраняем throws для мини-аппа: исходный throws={throws} (тип: {type(throws)}, длина: {len(throws)}), копия={throws_copy}")
+                else:
+                    # Если throws не список или пустой - это КРИТИЧЕСКАЯ ОШИБКА!
+                    logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: throws не является списком или пустой! throws={throws}, тип: {type(throws)}, game_result={game_result}")
+                    # НЕ используем game_result, так как это сумма, а не массив бросков!
+                    # Оставляем пустой список - лучше показать ошибку, чем неправильные данные
+                    throws_copy = []
+                
                 if game_id in MINI_APP_GAMES:
                     MINI_APP_GAMES[game_id]['status'] = 'completed'
                     MINI_APP_GAMES[game_id]['result'] = game_result  # Сумма для отображения
-                    MINI_APP_GAMES[game_id]['throws'] = throws  # ВАЖНО: Сохраняем список бросков для стикеров!
+                    MINI_APP_GAMES[game_id]['throws'] = throws_copy  # ВАЖНО: Сохраняем список бросков для стикеров!
                     MINI_APP_GAMES[game_id]['win'] = win
                     MINI_APP_GAMES[game_id]['new_balance'] = new_balance
                     MINI_APP_GAMES[game_id]['game_type'] = game_type
-                    logger.info(f"✅ Результат игры из мини-аппа сохранен: game_id={game_id}, result={game_result}, throws={throws}, win={win}")
+                    logger.info(f"✅ Результат игры из мини-аппа сохранен: game_id={game_id}, result={game_result}, throws={MINI_APP_GAMES[game_id].get('throws')}, win={win}")
+                else:
+                    logger.error(f"❌ game_id {game_id} не найден в MINI_APP_GAMES!")
             except Exception as e:
                 logger.error(f"Ошибка сохранения результата для мини-аппа: {e}", exc_info=True)
+        else:
+            logger.warning(f"⚠️ Игра НЕ из мини-аппа или нет game_id: mini_app={state.get('mini_app')}, game_id={state.get('game_id')}")
         
         # Начисляем реферальный бонус рефералу
         try:
@@ -431,18 +460,25 @@ async def process_game_result(bot, user_id: int, chat_id: int, game_type: str, b
             logger.error(f"❌ Ошибка при отправке сообщения с результатом: {e}", exc_info=True)
         
         # Отправляем стикеры для каждого эмодзи результата в один ряд (только если несколько бросков)
+        # ВАЖНО: НЕ отправляем стикеры в чат, если игра из мини-аппа - стикеры показываются в мини-аппе!
         # ВАЖНО: Используем throws (список результатов каждого броска), а НЕ game_result (сумму)!
         logger.info(f"🎲 Результаты бросков (throws): {throws}, количество: {len(throws)}")
         logger.info(f"📊 Результат игры (game_result, сумма): {game_result}")
         
-        if len(throws) > 1:
+        # Проверяем, является ли игра из мини-аппа
+        is_mini_app = state.get("mini_app", False)
+        
+        if len(throws) > 1 and not is_mini_app:
+            # Отправляем стикеры в чат только если игра НЕ из мини-аппа
             try:
                 # Создаем копию списка throws, чтобы гарантировать, что используем правильные значения
                 throws_copy = list(throws)
-                logger.info(f"🎨 Отправляю стикеры для {len(throws_copy)} результатов: {throws_copy}")
+                logger.info(f"🎨 Отправляю стикеры в чат для {len(throws_copy)} результатов: {throws_copy}")
                 await send_result_stickers(bot, chat_id, game_type, throws_copy, original_message_id)
             except Exception as e:
                 logger.error(f"❌ Ошибка при отправке стикеров результата: {e}", exc_info=True)
+        elif is_mini_app:
+            logger.info(f"ℹ️ Пропускаю отправку стикеров в чат: игра из мини-аппа (стикеры показываются в мини-аппе)")
         else:
             logger.info(f"ℹ️ Пропускаю отправку стикеров: только 1 бросок ({throws})")
         
@@ -2307,18 +2343,18 @@ BAR BAR BAR - 5x
                     base_symbols[right_idx],
                 ]
             
-            # Проверяем выигрыш
+            # Проверяем выигрыш (используя множители из config.py)
             multiplier = 0
             if symbols[0] == symbols[1] == symbols[2]:
-                # 3 одинаковых
-                if symbols[0] == "7️⃣":
-                    multiplier = 20
+                # 3 одинаковых символа
+                if symbols[0] == "7️⃣" or symbols[0] == "7":
+                    multiplier = 20  # 777 - 20x
                 elif symbols[0] == "🍇":
-                    multiplier = 10
+                    multiplier = 10  # 🍇🍇🍇 - 10x
                 elif symbols[0] == "🍋":
-                    multiplier = 7
-                elif symbols[0] == "BAR":
-                    multiplier = 5
+                    multiplier = 7   # 🍋🍋🍋 - 7x
+                elif symbols[0] == "BAR" or symbols[0] == "Bar":
+                    multiplier = 5   # BAR BAR BAR - 5x
             
             win = base_bet * multiplier
             total_win += win

@@ -1,13 +1,28 @@
 [build]
   publish = "."
   command = "echo 'No build needed'"
+  functions = "netlify/functions"
 
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
+# Исключаем статические файлы из редиректов
+[[redirects]]
+  from = "/tonconnect-manifest.json"
+  to = "/tonconnect-manifest.json"
+  status = 200
+  force = true
+
+# Проксирование API запросов через Netlify Function
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api-proxy/:splat"
+  status = 200
+
 [dev]
-  command = "echo 'Development server'"
   port = 8888
+  publish = "."
+  functions = "netlify/functions"
 

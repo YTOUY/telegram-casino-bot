@@ -917,8 +917,10 @@ class Database:
             db.row_factory = aiosqlite.Row
             
             # Определяем условие для периода
+            # Используем более надежный способ фильтрации по дате
             if period == "day":
-                date_filter = "DATE(g.created_at) = DATE('now', 'localtime')"
+                # Фильтр для текущего дня (с учетом локального времени)
+                date_filter = "DATE(g.created_at, 'localtime') = DATE('now', 'localtime')"
             elif period == "week":
                 date_filter = "g.created_at >= datetime('now', '-7 days', 'localtime')"
             elif period == "month":
@@ -935,6 +937,7 @@ class Database:
                 LEFT JOIN users u ON g.user_id = u.user_id
                 WHERE {date_filter} AND (g.currency IS NULL OR g.currency != 'arbuzz')
                 GROUP BY g.user_id
+                HAVING turnover > 0
                 ORDER BY turnover DESC
                 LIMIT ?
             """
@@ -956,7 +959,7 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             # Определяем условие для периода
             if period == "day":
-                date_filter = "DATE(created_at) = DATE('now', 'localtime')"
+                date_filter = "DATE(created_at, 'localtime') = DATE('now', 'localtime')"
             elif period == "week":
                 date_filter = "created_at >= datetime('now', '-7 days', 'localtime')"
             elif period == "month":
@@ -1006,7 +1009,7 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             # Определяем условие для периода
             if period == "day":
-                date_filter = "DATE(created_at) = DATE('now', 'localtime')"
+                date_filter = "DATE(created_at, 'localtime') = DATE('now', 'localtime')"
             elif period == "week":
                 date_filter = "created_at >= datetime('now', '-7 days', 'localtime')"
             elif period == "month":
@@ -1062,8 +1065,8 @@ class Database:
             )
             await db.commit()
 
-    async def add_deposit_with_status(self, user_id: int, amount: float, method: str, status: str = "pending"):
-        """Добавить запись о депозите с произвольным статусом"""
+    async def add_deposit_with_status(self, user_id: int, amount: float, method: str, status: str = "pending") -> int:
+        """Добавить запись о депозите с произвольным статусом. Возвращает ID депозита."""
         async with aiosqlite.connect(self.db_path) as db:
             # Обновление схемы: создаем таблицу для защиты от дублей по tx_hash
             await db.execute("""
@@ -1074,12 +1077,13 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            await db.execute(
+            cursor = await db.execute(
                 """INSERT INTO deposits (user_id, amount, method, status)
                    VALUES (?, ?, ?, ?)""",
                 (user_id, amount, method, status),
             )
             await db.commit()
+            return cursor.lastrowid
 
     async def is_chain_payment_new(self, tx_hash: str) -> bool:
         """Проверить, что tx_hash еще не зафиксирован"""
@@ -1129,6 +1133,19 @@ class Database:
             ) as cursor:
                 row = await cursor.fetchone()
                 return row[0] if row else 0.0
+
+    async def get_deposit_by_id(self, deposit_id: int) -> Optional[Dict]:
+        """Получить депозит по ID"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM deposits WHERE id = ?",
+                (deposit_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
 
     async def get_user_total_turnover(self, user_id: int) -> float:
         """Получить общий оборот пользователя (сумма всех ставок, исключая арбуз коины)"""
@@ -2176,6 +2193,93 @@ class Database:
             ) as cursor:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
+    
+    async def get_top_chats_by_turnover(self, period: str = "all", limit: int = 10) -> List[Dict]:
+        """Получить топ чатов по обороту (сумма всех ставок в чате)
+        
+        Args:
+            period: "day", "week", "month" или "all"
+            limit: количество чатов в топе
+        
+        Returns:
+            Список словарей с chat_id, title, username, turnover
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            
+            # Проверяем, есть ли поле chat_id в таблице games
+            # Если нет, используем альтернативный метод (по messages_count)
+            try:
+                # Пытаемся выполнить запрос с chat_id
+                # Определяем условие для периода
+                if period == "day":
+                    date_filter = "DATE(g.created_at, 'localtime') = DATE('now', 'localtime')"
+                elif period == "week":
+                    date_filter = "g.created_at >= datetime('now', '-7 days', 'localtime')"
+                elif period == "month":
+                    date_filter = "g.created_at >= datetime('now', '-30 days', 'localtime')"
+                else:  # all
+                    date_filter = "1=1"
+                
+                # Пробуем получить топ чатов по обороту из games
+                # Но сначала нужно проверить, есть ли поле chat_id
+                # Если нет, возвращаем топ по messages_count
+                query = f"""
+                    SELECT 
+                        c.chat_id,
+                        c.title,
+                        c.username,
+                        COALESCE(SUM(g.bet), 0) as turnover
+                    FROM chats c
+                    LEFT JOIN games g ON g.chat_id = c.chat_id AND {date_filter} AND (g.currency IS NULL OR g.currency != 'arbuzz')
+                    WHERE c.bot_is_admin = 1
+                    GROUP BY c.chat_id
+                    HAVING turnover > 0
+                    ORDER BY turnover DESC
+                    LIMIT ?
+                """
+                
+                async with db.execute(query, (limit,)) as cursor:
+                    rows = await cursor.fetchall()
+                    result = [dict(row) for row in rows]
+                    
+                    # Если результат пустой, возможно поле chat_id не существует
+                    # Используем альтернативный метод - топ по messages_count
+                    if not result:
+                        query_alt = """
+                            SELECT 
+                                chat_id,
+                                title,
+                                username,
+                                messages_count as turnover
+                            FROM chats
+                            WHERE bot_is_admin = 1
+                            ORDER BY messages_count DESC
+                            LIMIT ?
+                        """
+                        async with db.execute(query_alt, (limit,)) as cursor_alt:
+                            rows_alt = await cursor_alt.fetchall()
+                            return [dict(row) for row in rows_alt]
+                    
+                    return result
+            except Exception as e:
+                # Если произошла ошибка (скорее всего поле chat_id не существует),
+                # используем альтернативный метод
+                logger.debug(f"Ошибка при получении топа чатов по обороту: {e}, используем альтернативный метод")
+                query_alt = """
+                    SELECT 
+                        chat_id,
+                        title,
+                        username,
+                        messages_count as turnover
+                    FROM chats
+                    WHERE bot_is_admin = 1
+                    ORDER BY messages_count DESC
+                    LIMIT ?
+                """
+                async with db.execute(query_alt, (limit,)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(row) for row in rows]
     
     async def update_user_total_lost(self, user_id: int, amount: float):
         """Увеличить сумму проигранных средств пользователя"""

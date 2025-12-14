@@ -14,10 +14,13 @@ from typing import Optional, Dict
 import os
 
 from database import Database
-from config import BOT_TOKEN
+from config import BOT_TOKEN, TON_ADDRESS, MAX_DEPOSIT
 from handlers.mini_app import get_sticker_file_url
 from handlers.games import process_game_result, GAME_STATES, ACTIVE_GAMES
 from aiogram import Bot
+from ton_price import get_ton_to_usd_rate, ton_to_usd, usd_to_ton
+import secrets
+import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -309,8 +312,23 @@ async def handle_game_start(request: Request) -> Response:
                     logger.error(f"Не удалось запустить игру для пользователя {user_id}")
                     return web.json_response({"error": "Failed to start game"}, status=500)
             else:
-                # Для слотов пока заглушка
-                return web.json_response({"error": "Slots not implemented"}, status=501)
+                # Для слотов обрабатываем отдельно
+                # Списываем баланс
+                await db.decrease_rollover(user_id, bet)
+                await db.update_balance(user_id, -bet)
+                logger.info(f"💰 Списан баланс для слотов из мини-аппа: ${bet:.2f}, user_id={user_id}")
+                
+                # Отправляем слот в личный чат пользователя
+                slot_message = await bot.send_dice(chat_id=user_id, emoji="🎰")
+                
+                # Сохраняем информацию о слот-сообщении
+                MINI_APP_GAMES[game_id]['slot_message_id'] = slot_message.message_id
+                MINI_APP_GAMES[game_id]['slot_chat_id'] = slot_message.chat.id
+                
+                logger.info(f"🎰 Слот отправлен для мини-аппа: game_id={game_id}, user_id={user_id}, message_id={slot_message.message_id}")
+                
+                # Запускаем задачу для обработки результата слота
+                asyncio.create_task(process_mini_app_slots_result(game_id, user_id, bet, slot_message))
         except Exception as e:
             logger.error(f"Ошибка запуска игры: {e}", exc_info=True)
             return web.json_response({"error": "Internal server error"}, status=500)
@@ -324,14 +342,117 @@ async def handle_game_start(request: Request) -> Response:
         return web.json_response({"error": "Internal server error"}, status=500)
 
 
+async def process_mini_app_slots_result(game_id: int, user_id: int, bet: float, slot_message):
+    """Обработать результат слота из мини-аппа"""
+    try:
+        # Ждем завершения анимации слота (Telegram dice анимация длится ~2-3 секунды)
+        await asyncio.sleep(3)
+        
+        # Получаем значение слота из сообщения
+        # После завершения анимации (3 секунды) dice.value будет содержать финальное значение
+        slot_value = None
+        if hasattr(slot_message, 'dice') and slot_message.dice:
+            slot_value = slot_message.dice.value
+        
+        # Если значение еще не готово (анимация не завершена), получаем обновленное сообщение
+        if slot_value is None or slot_value == 0:
+            try:
+                # Получаем обновленное сообщение через get_chat_member и затем через get_updates
+                # Или просто ждем еще немного - после 3 секунд значение должно быть готово
+                await asyncio.sleep(0.5)
+                # Пробуем получить сообщение заново через bot.get_chat
+                # Но проще всего - использовать значение из исходного сообщения после ожидания
+                # В aiogram dice.value обновляется автоматически в объекте сообщения
+                if hasattr(slot_message, 'dice') and slot_message.dice:
+                    slot_value = slot_message.dice.value
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось получить значение слота: {e}")
+        
+        # Если все еще нет значения, используем случайное (для тестирования)
+        # В продакшене это не должно происходить, так как анимация завершится за 3 секунды
+        if slot_value is None or slot_value == 0:
+            import random
+            slot_value = random.randint(1, 64)
+            logger.warning(f"⚠️ Не удалось получить значение слота, используем случайное: {slot_value}")
+        
+        # Декодируем символы
+        from utils.checks import decode_slot_symbols
+        symbols = decode_slot_symbols(slot_value)
+        
+        # Проверяем выигрыш (используя множители из config.py)
+        multiplier = 0
+        if symbols[0] == symbols[1] == symbols[2]:
+            # 3 одинаковых символа
+            if symbols[0] == "7":
+                multiplier = 20  # 777 - 20x
+            elif symbols[0] == "🍇":
+                multiplier = 10  # 🍇🍇🍇 - 10x
+            elif symbols[0] == "🍋":
+                multiplier = 7   # 🍋🍋🍋 - 7x
+            elif symbols[0] == "Bar":
+                multiplier = 5   # BAR BAR BAR - 5x
+        
+        win = bet * multiplier
+        
+        # Зачисляем выигрыш
+        if win > 0:
+            await db.update_balance(user_id, win)
+            logger.info(f"💰 Зачислен выигрыш для слотов из мини-аппа: ${win:.2f}, user_id={user_id}")
+        
+        # Сохраняем игру в БД
+        await db.add_game(user_id, "slots", bet, 0, win, None, currency="dollar")
+        
+        # Получаем новый баланс
+        user = await db.get_user(user_id)
+        new_balance = user.get('balance', 0.0) if user else 0.0
+        
+        # Обновляем статус игры в MINI_APP_GAMES
+        if game_id in MINI_APP_GAMES:
+            MINI_APP_GAMES[game_id]['status'] = 'completed'
+            MINI_APP_GAMES[game_id]['result'] = slot_value  # Значение слота (1-64)
+            MINI_APP_GAMES[game_id]['symbols'] = symbols  # Массив символов ["7", "Bar", "🍇"]
+            MINI_APP_GAMES[game_id]['win'] = win
+            MINI_APP_GAMES[game_id]['new_balance'] = new_balance
+            MINI_APP_GAMES[game_id]['game_type'] = 'slots'
+            MINI_APP_GAMES[game_id]['throws'] = symbols  # Для совместимости с другими играми
+            logger.info(f"✅ Слот из мини-аппа обработан: game_id={game_id}, symbols={symbols}, win={win}")
+        else:
+            logger.error(f"❌ game_id {game_id} не найден в MINI_APP_GAMES!")
+            
+    except Exception as e:
+        logger.error(f"Ошибка обработки слота из мини-аппа: {e}", exc_info=True)
+        if game_id in MINI_APP_GAMES:
+            MINI_APP_GAMES[game_id]['status'] = 'error'
+
+
 async def check_mini_app_game_result(game_id: int, user_id: int):
     """Проверить результат игры из мини-аппа"""
-    max_attempts = 5  # Ждем максимум 5 секунд
+    max_attempts = 20  # Увеличиваем для слотов (нужно больше времени)
     attempts = 0
     
     try:
         from handlers.games import GAME_STATES
         
+        # Проверяем тип игры
+        game_info = MINI_APP_GAMES.get(game_id, {})
+        game_type = game_info.get('game_type', 'unknown')
+        
+        # Для слотов проверяем MINI_APP_GAMES напрямую
+        if game_type == 'slots':
+            while attempts < max_attempts:
+                await asyncio.sleep(0.5)
+                attempts += 1
+                
+                if game_id in MINI_APP_GAMES and MINI_APP_GAMES[game_id].get('status') == 'completed':
+                    logger.info(f"✅ Слот завершен: game_id={game_id}")
+                    break
+                elif game_id in MINI_APP_GAMES and MINI_APP_GAMES[game_id].get('status') in ['error', 'timeout']:
+                    logger.warning(f"⚠️ Слот завершен с ошибкой: game_id={game_id}, status={MINI_APP_GAMES[game_id].get('status')}")
+                    break
+            
+            return  # Для слотов не используем GAME_STATES
+        
+        # Для остальных игр используем стандартную логику
         while attempts < max_attempts:
             await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды для быстрого отклика
             attempts += 1
@@ -355,7 +476,10 @@ async def check_mini_app_game_result(game_id: int, user_id: int):
             if state.get("result_processed", False) and state.get("game_id") == game_id:
                 # Игра обработана, получаем результат
                 throws = state.get("throws", [])
+                logger.info(f"🔍 check_mini_app_game_result: throws из состояния={throws}, тип={type(throws)}, is_list={isinstance(throws, list)}")
+                
                 if throws:
+                    # ВАЖНО: result - это сумма для отображения, но throws - это массив каждого броска
                     result = throws[0] if len(throws) == 1 else sum(throws)
                     game_type = state.get("game_type", "dice")
                     
@@ -368,14 +492,37 @@ async def check_mini_app_game_result(game_id: int, user_id: int):
                     new_balance = user.get('balance', 0.0) if user else 0.0
                     
                     # Обновляем статус игры в MINI_APP_GAMES
+                    # ВАЖНО: Сохраняем throws как список, даже если он уже был сохранен в process_game_result
                     if game_id in MINI_APP_GAMES:
                         MINI_APP_GAMES[game_id]['status'] = 'completed'
-                        MINI_APP_GAMES[game_id]['result'] = result
+                        MINI_APP_GAMES[game_id]['result'] = result  # Сумма для отображения
+                        # ВАЖНО: Всегда сохраняем throws из состояния, так как это самый актуальный источник
+                        # НИКОГДА не используем result (сумму) как fallback для throws!
+                        if isinstance(throws, list) and len(throws) > 0:
+                            MINI_APP_GAMES[game_id]['throws'] = throws.copy()  # ВАЖНО: Массив каждого броска для стикеров
+                            logger.info(f"💾 Сохранен throws в check_mini_app_game_result: {throws} → {MINI_APP_GAMES[game_id]['throws']}")
+                        elif 'throws' not in MINI_APP_GAMES[game_id] or not MINI_APP_GAMES[game_id].get('throws'):
+                            # Если throws не список или пустой - это ошибка, НЕ создаем из result!
+                            logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: throws не является списком в check_mini_app_game_result! throws={throws}, тип: {type(throws)}")
+                            # НЕ используем result, так как это сумма! Оставляем пустой список
+                            MINI_APP_GAMES[game_id]['throws'] = []
                         MINI_APP_GAMES[game_id]['win'] = win
                         MINI_APP_GAMES[game_id]['new_balance'] = new_balance
                         MINI_APP_GAMES[game_id]['game_type'] = game_type
+                        logger.info(f"📋 MINI_APP_GAMES после сохранения: throws={MINI_APP_GAMES[game_id].get('throws')}")
+                    else:
+                        logger.error(f"❌ game_id {game_id} не найден в MINI_APP_GAMES!")
                     
-                    logger.info(f"✅ Игра из мини-аппа завершена: game_id={game_id}, result={result}, win={win}")
+                    logger.info(f"✅ Игра из мини-аппа завершена: game_id={game_id}, result={result}, throws={throws}, win={win}")
+                    break
+                else:
+                    logger.error(f"❌ throws пустой в check_mini_app_game_result! state={state}")
+            
+            # Дополнительная проверка: если состояние уже удалено, но игра завершена в MINI_APP_GAMES
+            if game_id in MINI_APP_GAMES and MINI_APP_GAMES[game_id].get('status') == 'completed':
+                # Игра уже завершена, throws должен быть сохранен в process_game_result
+                if MINI_APP_GAMES[game_id].get('throws'):
+                    logger.info(f"✅ Игра уже завершена в MINI_APP_GAMES: game_id={game_id}, throws={MINI_APP_GAMES[game_id].get('throws')}")
                     break
             
             # Проверяем, не истекло ли время ожидания
@@ -403,9 +550,50 @@ async def handle_game_result(request: Request) -> Response:
             return web.json_response({"error": "Game not found"}, status=404)
         
         if game_data['status'] == 'completed':
+            game_type = game_data.get('game_type', 'unknown')
+            
+            # Для слотов используем symbols вместо throws
+            if game_type == 'slots':
+                symbols = game_data.get('symbols', [])
+                result = game_data.get('result')  # Значение слота (1-64)
+                
+                logger.info(f"📤 Отправка результата слота: game_id={game_id}, result={result}, symbols={symbols}")
+                
+                return web.json_response({
+                    "completed": True,
+                    "result": result,
+                    "symbols": symbols,  # Массив символов ["7", "Bar", "🍇"]
+                    "throws": symbols,  # Для совместимости с другими играми
+                    "win": game_data.get('win', 0.0),
+                    "new_balance": game_data.get('new_balance', 0.0),
+                    "game_type": game_type
+                })
+            
+            # Для остальных игр используем стандартную логику
+            throws = game_data.get('throws')
+            result = game_data.get('result')
+            
+            # Логируем для отладки
+            logger.info(f"📤 Отправка результата игры: game_id={game_id}, result={result}, throws={throws}, throws_type={type(throws)}, is_list={isinstance(throws, list)}")
+            
+            # ВАЖНО: Убеждаемся, что throws это список
+            # НИКОГДА не используем result (сумму) как fallback для throws!
+            if not isinstance(throws, list) or len(throws) == 0:
+                # Если throws не список или пустой - это КРИТИЧЕСКАЯ ОШИБКА!
+                logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: throws отсутствует или не список для game_id={game_id}! throws={throws}, тип: {type(throws)}, result={result}")
+                logger.error(f"❌ Полные данные игры: {game_data}")
+                # НЕ используем result, так как это сумма! Оставляем пустой список
+                # Лучше показать ошибку, чем неправильные данные
+                throws = []
+            
+            # Дополнительная проверка: если throws это список с одним элементом, который равен result, 
+            # и result > 6 (что означает сумму), то возможно это ошибка - но мы все равно отправим throws
+            logger.info(f"📤 Финальный throws для отправки: {throws} (тип: {type(throws)}, длина: {len(throws) if isinstance(throws, list) else 'N/A'})")
+            
             return web.json_response({
                 "completed": True,
-                "result": game_data.get('result'),
+                "result": result,
+                "throws": throws,  # ВАЖНО: Массив каждого броска для отображения стикеров
                 "win": game_data.get('win', 0.0),
                 "new_balance": game_data.get('new_balance', 0.0),
                 "game_type": game_data['game_type']
@@ -491,18 +679,39 @@ async def handle_check_create(request: Request) -> Response:
 
 async def handle_lotteries(request: Request) -> Response:
     """GET /api/lotteries - Получить список лотерей"""
+    user_data = await get_user_from_request(request)
+    user_id = user_data.get('id') if user_data else None
+    
     try:
         lotteries = await db.get_active_lotteries()
-        return web.json_response([
-            {
-                "id": l['id'],
+        
+        # Для каждой лотереи получаем количество билетов пользователя
+        result = []
+        for l in lotteries:
+            lottery_id = l['id']
+            user_tickets = 0
+            
+            # Получаем количество билетов пользователя в этой лотерее
+            if user_id:
+                try:
+                    # Получаем количество билетов пользователя (правильный порядок аргументов: lottery_id, user_id)
+                    user_tickets = await db.get_user_lottery_tickets_count(lottery_id, user_id)
+                except Exception as e:
+                    # Если метод не реализован или произошла ошибка, используем 0
+                    logger.debug(f"Не удалось получить билеты пользователя для лотереи {lottery_id}: {e}")
+                    user_tickets = 0
+            
+            result.append({
+                "id": lottery_id,
                 "title": l['title'],
                 "description": l.get('description', ''),
                 "total_tickets": l.get('total_tickets', 0),
-                "ticket_price": l.get('ticket_price', 0.0)
-            }
-            for l in lotteries
-        ])
+                "user_tickets": user_tickets,  # Количество билетов пользователя
+                "ticket_price": l.get('ticket_price', 0.0),
+                "max_tickets_per_user": l.get('max_tickets_per_user', 999)  # Максимум билетов на пользователя
+            })
+        
+        return web.json_response(result)
     except Exception as e:
         logger.error(f"Ошибка получения лотерей: {e}", exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
@@ -533,24 +742,26 @@ async def handle_lottery_participate(request: Request) -> Response:
         if lottery['status'] != 'active':
             return web.json_response({"error": "Lottery is not active"}, status=400)
         
-        ticket_price = lottery.get('ticket_price', 0.0)
+        # Используем buy_lottery_ticket, который делает все проверки и добавляет билет
+        ticket_number = await db.buy_lottery_ticket(lottery_id, user_id)
         
-        # Проверяем баланс
-        user = await db.get_user(user_id)
-        if not user:
-            return web.json_response({"error": "User not found"}, status=404)
+        if not ticket_number:
+            # Проверяем причину ошибки
+            user = await db.get_user(user_id)
+            if not user:
+                return web.json_response({"error": "User not found"}, status=404)
+            
+            balance = user.get('balance', 0.0)
+            user_tickets_count = await db.get_user_lottery_tickets_count(lottery_id, user_id)
+            
+            if user_tickets_count >= lottery.get('max_tickets_per_user', 999):
+                return web.json_response({"error": "Вы достигли лимита билетов"}, status=400)
+            elif balance < lottery.get('ticket_price', 0.0):
+                return web.json_response({"error": "Недостаточно средств"}, status=400)
+            else:
+                return web.json_response({"error": "Ошибка при покупке билета"}, status=400)
         
-        balance = user.get('balance', 0.0)
-        if balance < ticket_price:
-            return web.json_response({"error": "Insufficient balance"}, status=400)
-        
-        # Списываем стоимость билета
-        await db.update_balance(user_id, -ticket_price)
-        
-        # Добавляем билет (нужно реализовать в database.py)
-        # await db.add_lottery_ticket(lottery_id, user_id)
-        
-        return web.json_response({"success": True})
+        return web.json_response({"success": True, "ticket_number": ticket_number})
     except Exception as e:
         logger.error(f"Ошибка участия в лотерее: {e}", exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
@@ -586,25 +797,88 @@ async def handle_gifts(request: Request) -> Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def get_user_photo_url(user_id: int) -> Optional[str]:
+    """Получить URL аватара пользователя через Telegram Bot API"""
+    try:
+        # Пытаемся получить фото профиля пользователя
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if photos and photos.photos and len(photos.photos) > 0:
+            # Берем самое большое фото
+            photo = photos.photos[0][-1]
+            file = await bot.get_file(photo.file_id)
+            return f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+    except Exception as e:
+        logger.debug(f"Не удалось получить аватар для пользователя {user_id}: {e}")
+    return None
+
+
 async def handle_top(request: Request) -> Response:
     """GET /api/top - Получить топ игроков/чатов"""
     category = request.query.get('category', 'players')
     period = request.query.get('period', 'day')
     
     try:
-        # Получаем топ игроков
-        top_players = await db.get_top_by_turnover(period=period, limit=100)
+        # Получаем данные текущего пользователя
+        user_data = await get_user_from_request(request)
+        user_id = user_data.get('id') if user_data else None
         
-        return web.json_response({
-            "top": [
-                {
+        if category == 'chats':
+            # Топ чатов - получаем из таблицы chats
+            try:
+                top_chats = await db.get_top_chats_by_turnover(period=period, limit=100)
+                
+                return web.json_response({
+                    "top": [
+                        {
+                            "chat_id": c['chat_id'],
+                            "title": c.get('title', f"Чат {c['chat_id']}"),
+                            "username": c.get('username'),
+                            "turnover": c.get('turnover', 0.0)
+                        }
+                        for c in top_chats
+                    ],
+                    "user": None  # Для чатов позиция пользователя не применима
+                })
+            except Exception as e:
+                logger.error(f"Ошибка получения топа чатов: {e}", exc_info=True)
+                # Если метод не реализован, возвращаем пустой список
+                return web.json_response({
+                    "top": [],
+                    "user": None,
+                    "message": "Топ чатов пока не реализован"
+                })
+        else:
+            # Топ игроков
+            top_players = await db.get_top_by_turnover(period=period, limit=100)
+            
+            # Получаем аватарки для всех пользователей в топе
+            top_with_avatars = []
+            for p in top_players:
+                photo_url = await get_user_photo_url(p['user_id'])
+                top_with_avatars.append({
                     "user_id": p['user_id'],
                     "username": p.get('username', f"ID{p['user_id']}"),
-                    "turnover": p.get('total_volume', 0.0)
-                }
-                for p in top_players
-            ]
-        })
+                    "turnover": p.get('turnover', 0.0),
+                    "photo_url": photo_url
+                })
+            
+            # Получаем позицию и оборот текущего пользователя
+            user_position = None
+            user_turnover = None
+            if user_id:
+                try:
+                    user_position = await db.get_user_turnover_position(user_id, period)
+                    user_turnover = await db.get_user_turnover(user_id, period)
+                except Exception as e:
+                    logger.warning(f"Ошибка получения данных пользователя для топа: {e}")
+            
+            return web.json_response({
+                "top": top_with_avatars,
+                "user": {
+                    "position": user_position,
+                    "turnover": user_turnover
+                } if user_id else None
+            })
     except Exception as e:
         logger.error(f"Ошибка получения топа: {e}", exc_info=True)
         return web.json_response({"error": "Internal server error"}, status=500)
@@ -647,6 +921,167 @@ async def handle_profile(request: Request) -> Response:
         return web.json_response({"error": "Internal server error"}, status=500)
 
 
+async def handle_wallet_deposit_methods(request: Request) -> Response:
+    """GET /api/wallet/deposit-methods - Получить список методов пополнения"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    try:
+        # Список методов пополнения (соответствует keyboards.py get_deposit_keyboard)
+        methods = [
+            {
+                "id": "ton",
+                "name": "TON",
+                "icon": "💎",
+                "description": "Пополнение через TON кошелек"
+            },
+            {
+                "id": "cryptobot",
+                "name": "CryptoBot",
+                "icon": "🏝️",
+                "description": "Пополнение через CryptoBot"
+            },
+            {
+                "id": "xrocket",
+                "name": "xRocket",
+                "icon": "🚀",
+                "description": "Пополнение через xRocket"
+            },
+            {
+                "id": "gifts",
+                "name": "Подарки",
+                "icon": "🎁",
+                "description": "Пополнение через подарки"
+            }
+        ]
+        
+        return web.json_response({"methods": methods})
+    except Exception as e:
+        logger.error(f"Ошибка получения методов пополнения: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+async def handle_wallet_deposit_address(request: Request) -> Response:
+    """POST /api/wallet/deposit-address - Получить адрес для пополнения через TON"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    user_id = user_data.get('id')
+    if not user_id:
+        return web.json_response({"error": "Invalid user data"}, status=400)
+    
+    try:
+        data = await request.json()
+        amount_ton = float(data.get('amount', 0.0))
+        currency = data.get('currency', 'TON')
+        
+        if amount_ton < 0.01:
+            return web.json_response({"error": "Минимальная сумма пополнения: 0.01 TON"}, status=400)
+        
+        # Получаем курс TON
+        ton_rate = await get_ton_to_usd_rate()
+        amount_usd = ton_to_usd(amount_ton, ton_rate)
+        
+        # Проверяем максимальную сумму
+        if amount_usd > MAX_DEPOSIT:
+            return web.json_response({
+                "error": f"Максимальная сумма пополнения: ${MAX_DEPOSIT:.2f} ({usd_to_ton(MAX_DEPOSIT, ton_rate):.4f} TON)"
+            }, status=400)
+        
+        # Создаем запись о депозите со статусом pending
+        deposit_id = await db.add_deposit_with_status(user_id, amount_usd, "ton_connect", "pending")
+        
+        logger.info(f"Создан депозит для пользователя {user_id}: {amount_ton:.4f} TON (${amount_usd:.2f}), deposit_id={deposit_id}")
+        
+        return web.json_response({
+            "address": TON_ADDRESS,
+            "deposit_address": TON_ADDRESS,
+            "deposit_id": deposit_id,
+            "amount_ton": amount_ton,
+            "amount_usd": amount_usd,
+            "memo": str(user_id),  # user_id в качестве memo для автоматического начисления
+            "currency": currency
+        })
+    except Exception as e:
+        logger.error(f"Ошибка создания депозита: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+async def handle_wallet_deposit_status(request: Request) -> Response:
+    """GET /api/wallet/deposit-status/{deposit_id} - Проверить статус депозита"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    user_id = user_data.get('id')
+    if not user_id:
+        return web.json_response({"error": "Invalid user data"}, status=400)
+    
+    try:
+        deposit_id = int(request.match_info.get('deposit_id', 0))
+        if not deposit_id:
+            return web.json_response({"error": "deposit_id required"}, status=400)
+        
+        # Получаем депозит
+        deposit = await db.get_deposit_by_id(deposit_id)
+        if not deposit:
+            return web.json_response({"error": "Deposit not found"}, status=404)
+        
+        # Проверяем, что депозит принадлежит пользователю
+        if deposit.get('user_id') != user_id:
+            return web.json_response({"error": "Unauthorized"}, status=403)
+        
+        status = deposit.get('status', 'pending')
+        
+        # Если статус pending, проверяем транзакции в блокчейне
+        if status == 'pending':
+            # Проверяем, была ли транзакция с memo = user_id и нужной суммой
+            from ton_chain import find_incoming_tx_by_comment
+            from ton_price import get_ton_to_usd_rate
+            
+            amount_usd = deposit.get('amount', 0.0)
+            ton_rate = await get_ton_to_usd_rate()
+            amount_ton = usd_to_ton(amount_usd, ton_rate)
+            min_amount_nano = int(amount_ton * 0.98 * 1e9)  # Допускаем 2% расхождение
+            
+            tx_result = await find_incoming_tx_by_comment(
+                TON_ADDRESS,
+                str(user_id),
+                min_amount_nano
+            )
+            
+            if tx_result:
+                tx_hash, amount_nano = tx_result
+                # Проверяем, что транзакция еще не обработана
+                if await db.is_chain_payment_new(tx_hash):
+                    # Начисляем баланс
+                    await db.update_balance(user_id, amount_usd)
+                    await db.save_chain_payment(tx_hash, user_id, amount_usd)
+                    
+                    # Обновляем статус депозита
+                    async with aiosqlite.connect(db.db_path) as conn:
+                        await conn.execute(
+                            "UPDATE deposits SET status = 'completed' WHERE id = ?",
+                            (deposit_id,)
+                        )
+                        await conn.commit()
+                    
+                    status = 'completed'
+                    logger.info(f"Депозит {deposit_id} подтвержден автоматически: tx_hash={tx_hash}")
+        
+        return web.json_response({
+            "deposit_id": deposit_id,
+            "status": status,
+            "amount": deposit.get('amount', 0.0),
+            "created_at": deposit.get('created_at')
+        })
+    except Exception as e:
+        logger.error(f"Ошибка проверки статуса депозита: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
 def create_app() -> web.Application:
     """Создать приложение aiohttp"""
     app = web.Application()
@@ -685,6 +1120,9 @@ def create_app() -> web.Application:
     app.router.add_get('/api/gifts', handle_gifts)
     app.router.add_get('/api/top', handle_top)
     app.router.add_get('/api/profile', handle_profile)
+    app.router.add_get('/api/wallet/deposit-methods', handle_wallet_deposit_methods)
+    app.router.add_post('/api/wallet/deposit-address', handle_wallet_deposit_address)
+    app.router.add_get('/api/wallet/deposit-status/{deposit_id}', handle_wallet_deposit_status)
     
     return app
 

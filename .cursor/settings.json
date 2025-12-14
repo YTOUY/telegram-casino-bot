@@ -1,0 +1,14 @@
+{
+  "storage": {
+    "type": "local",
+    "options": ["local", "cloud"]
+  },
+  "workspace": {
+    "storageLocation": "local"
+  },
+  "environment": {
+    "current": "local",
+    "available": ["local", "cloud", "worktree"],
+    "selectorEnabled": true
+  }
+}

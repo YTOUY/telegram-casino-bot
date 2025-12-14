@@ -14,7 +14,14 @@ const appState = {
     currentGameId: null,
     selectedGameMode: null,
     selectedBet: 1.0,
-    gameInProgress: false  // Флаг активной игры для блокировки повторных запусков
+    gameInProgress: false,  // Флаг активной игры для блокировки повторных запусков
+    slotsSpinUsed: false,    // Слоты: можно крутить только 1 раз (на сессию мини-аппа)
+    slotsLastSymbols: null,   // Слоты: последние выпавшие символы (чтобы не терять результат при навигации)
+    tonRate: 5.0,  // Курс TON к USD (обновляется каждые 10 минут)
+    tonRateUpdateInterval: null,  // Интервал обновления курса
+    topRefreshInterval: null,  // Интервал автоматического обновления топа
+    currentTopCategory: 'players',  // Текущая категория топа
+    currentTopPeriod: 'day'  // Текущий период топа (по умолчанию день)
 };
 
 // API endpoints
@@ -22,14 +29,17 @@ const appState = {
 // API сервер должен быть доступен по публичному URL (например, через ngrok, VPS или другой хостинг)
 // Пример: 'https://your-api-server.com:8080/api' или 'https://your-api-domain.com/api'
 
-let API_BASE = '/api'; // По умолчанию относительный путь (для локальной разработки)
+let API_BASE = '/api'; // дефолт, если сайт сам проксирует /api
 
-// Для продакшена на Netlify используем Netlify Function как прокси
-if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    // Мини-апп развернут на: https://arbuzcas.netlify.app
-    // Используем Netlify Function для проксирования запросов (решает проблему HTTPS -> HTTP)
+// Netlify (включая netlify dev на localhost): используем Netlify Function как прокси
+const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const isNetlifyHost = window.location.hostname.endsWith('netlify.app');
+if (isLocalHost || isNetlifyHost) {
     API_BASE = '/.netlify/functions/api-proxy/api';
 }
+
+// Максимальная сумма депозита
+const MAX_DEPOSIT = 1000;
 
 console.log('🌐 API_BASE установлен:', API_BASE, '(hostname:', window.location.hostname + ')');
 
@@ -89,6 +99,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Инициализируем UI сразу после загрузки данных
     updateUI();
+    
+    // Запускаем обновление курса TON каждые 10 минут (не блокируем загрузку)
+    // Используем setTimeout чтобы не блокировать инициализацию
+    setTimeout(() => {
+        startTONRateUpdates();
+    }, 1000);
     
     // Показываем начальный экран
     showSplashScreen();
@@ -306,11 +322,25 @@ function loadLottieLibrary() {
 
 // Загрузить TGS стикер через lottie
 async function loadTgsSticker(element, tgsUrl) {
+    // Очищаем элемент перед загрузкой
+    element.innerHTML = '';
+    
+    // Добавляем cache buster если его еще нет (более агрессивный)
+    if (tgsUrl && !tgsUrl.includes('?v=') && !tgsUrl.includes('&v=')) {
+        const separator = tgsUrl.includes('?') ? '&' : '?';
+        tgsUrl = `${tgsUrl}${separator}v=${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    }
     try {
         console.log('🎬 Загрузка TGS стикера:', tgsUrl);
         
-        // Загружаем TGS файл
-        const response = await fetch(tgsUrl);
+        // Загружаем TGS файл с полным отключением кэша
+        const response = await fetch(tgsUrl, { 
+            cache: 'no-store',
+            headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma': 'no-cache'
+            }
+        });
         if (!response.ok) {
             throw new Error(`Не удалось загрузить TGS файл: ${response.status}`);
         }
@@ -337,6 +367,12 @@ async function loadTgsSticker(element, tgsUrl) {
         const lottieJson = JSON.parse(decompressed);
         console.log('✅ TGS распакован в Lottie JSON');
         
+        // Валидация Lottie JSON
+        if (!lottieJson.v || !lottieJson.layers || !Array.isArray(lottieJson.layers)) {
+            throw new Error('Невалидный Lottie JSON: отсутствуют обязательные поля');
+        }
+        console.log(`📋 Lottie версия: ${lottieJson.v}, слоев: ${lottieJson.layers.length}, размеры: ${lottieJson.w || '?'}x${lottieJson.h || '?'}`);
+        
         // Создаем контейнер для анимации
         const lottieContainer = document.createElement('div');
         lottieContainer.style.width = '100%';
@@ -349,12 +385,50 @@ async function loadTgsSticker(element, tgsUrl) {
         
         // Загружаем анимацию через lottie
         if (window.lottie) {
+            // Уничтожаем старую анимацию, если она существует
+            if (element._lottieAnim) {
+                try {
+                    element._lottieAnim.destroy();
+                } catch (e) {
+                    console.warn('Ошибка при уничтожении старой анимации:', e);
+                }
+                element._lottieAnim = null;
+            }
+            
+            // Проверяем валидность данных перед загрузкой
+            if (!lottieJson.layers || !Array.isArray(lottieJson.layers) || lottieJson.layers.length === 0) {
+                throw new Error('Lottie JSON не содержит слоев или слои пусты');
+            }
+            
+            console.log(`📋 Lottie данные: версия=${lottieJson.v || '?'}, размеры=${lottieJson.w || '?'}x${lottieJson.h || '?'}, слоев=${lottieJson.layers.length}`);
+            
             const anim = lottie.loadAnimation({
                 container: lottieContainer,
                 renderer: 'svg',
                 loop: true,
                 autoplay: true,
                 animationData: lottieJson
+            });
+            
+            // Проверяем, что анимация создана успешно
+            if (!anim) {
+                throw new Error('Не удалось создать Lottie анимацию');
+            }
+            
+            // Сохраняем ссылку на анимацию для последующего уничтожения
+            element._lottieAnim = anim;
+            
+            // Добавляем обработчик ошибок анимации
+            anim.addEventListener('data_failed', () => {
+                console.error('❌ Lottie анимация: ошибка загрузки данных');
+            });
+            
+            anim.addEventListener('config_ready', () => {
+                console.log('✅ Lottie анимация: конфигурация готова');
+            });
+            
+            anim.addEventListener('data_ready', () => {
+                console.log('✅ Lottie анимация: данные готовы');
             });
             
             element.style.opacity = '1';
@@ -365,26 +439,30 @@ async function loadTgsSticker(element, tgsUrl) {
         }
     } catch (error) {
         console.error('❌ Ошибка загрузки TGS стикера:', error);
-        // Показываем fallback только если это критическая ошибка
-        if (error.message.includes('Lottie')) {
-            showStickerFallback(element, true);
-        } else {
-            // Пробуем показать стикер как изображение (может быть это не TGS)
-            console.warn('⚠️ Пробуем показать как обычное изображение');
-            const img = document.createElement('img');
-            img.src = tgsUrl;
-            img.style.width = '100%';
-            img.style.height = '100%';
-            img.style.objectFit = 'contain';
-            img.onload = () => {
-                element.innerHTML = '';
-                element.appendChild(img);
-                element.style.opacity = '1';
-            };
-            img.onerror = () => {
-                showStickerFallback(element, true);
-            };
-        }
+        console.error('❌ Детали ошибки:', {
+            message: error.message,
+            stack: error.stack,
+            url: tgsUrl,
+            hasLottie: !!window.lottie,
+            hasPako: !!window.pako
+        });
+        
+        // НЕ показываем fallback изображение для TGS - это может быть неправильный формат
+        // Лучше показать ошибку, чтобы пользователь знал, что что-то не так
+        const errorDiv = document.createElement('div');
+        errorDiv.style.width = '100%';
+        errorDiv.style.height = '100%';
+        errorDiv.style.background = 'rgba(255, 0, 0, 0.1)';
+        errorDiv.style.borderRadius = '20px';
+        errorDiv.style.display = 'flex';
+        errorDiv.style.alignItems = 'center';
+        errorDiv.style.justifyContent = 'center';
+        errorDiv.style.color = 'var(--text-secondary)';
+        errorDiv.style.fontSize = '12px';
+        errorDiv.textContent = '⚠️ TGS ошибка';
+        element.innerHTML = '';
+        element.appendChild(errorDiv);
+        element.style.opacity = '1';
     }
 }
 
@@ -478,6 +556,10 @@ async function loadUserData() {
                 console.log(`💰 Баланс обновлен: $${newBalance.toFixed(2)}`);
             }
             appState.baseBet = newBaseBet;
+            // Обновляем selectedBet если он еще не был установлен или равен дефолтному значению
+            if (appState.selectedBet === 1.0 || appState.selectedBet === 0) {
+                appState.selectedBet = newBaseBet;
+            }
             updateUI();
         } else {
             let errorData = {};
@@ -525,6 +607,49 @@ async function loadUserData() {
     }
 }
 
+// Обновить курс TON
+async function updateTONRate() {
+    try {
+        const response = await fetch(`${API_BASE}/ton-rate`, {
+            method: 'GET',
+            headers: {
+                'X-Telegram-Init-Data': getInitData()
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            appState.tonRate = parseFloat(data.rate) || 5.0;
+            console.log(`✅ Курс TON обновлен: $${appState.tonRate.toFixed(2)} за 1 TON`);
+            updateUI(); // Обновляем UI с новым курсом
+        } else {
+            console.warn('⚠️ Не удалось обновить курс TON, используется значение по умолчанию');
+            // Используем значение по умолчанию если API не отвечает
+            if (!appState.tonRate || appState.tonRate === 0) {
+                appState.tonRate = 5.0;
+            }
+        }
+    } catch (error) {
+        console.error('❌ Ошибка обновления курса TON:', error);
+        // Используем значение по умолчанию при ошибке
+        if (!appState.tonRate || appState.tonRate === 0) {
+            appState.tonRate = 5.0;
+        }
+    }
+}
+
+// Запустить периодическое обновление курса TON (каждые 10 минут)
+function startTONRateUpdates() {
+    // Обновляем сразу при загрузке
+    updateTONRate();
+    
+    // Обновляем каждые 10 минут (600000 мс)
+    if (appState.tonRateUpdateInterval) {
+        clearInterval(appState.tonRateUpdateInterval);
+    }
+    appState.tonRateUpdateInterval = setInterval(updateTONRate, 600000);
+}
+
 // Обновить UI
 function updateUI() {
     // Обновляем баланс (если элемент существует)
@@ -535,13 +660,13 @@ function updateUI() {
     
     // Обновляем баланс в TON (если элемент существует)
     const balanceTonEl = document.getElementById('balance-ton');
-    if (balanceTonEl && appState.balance > 0) {
-        // Примерный курс 1 TON = 5 USD (можно добавить API для получения курса)
-        const tonRate = 5.0;
-        const balanceTon = appState.balance / tonRate;
-        balanceTonEl.textContent = `${balanceTon.toFixed(4)} TON`;
-    } else if (balanceTonEl) {
-        balanceTonEl.textContent = '0.0000 TON';
+    if (balanceTonEl) {
+        if (appState.balance > 0 && appState.tonRate > 0) {
+            const balanceTon = appState.balance / appState.tonRate;
+            balanceTonEl.textContent = `${balanceTon.toFixed(4)} TON`;
+        } else {
+            balanceTonEl.textContent = '0.0000 TON';
+        }
     }
     
     // Обновляем базовую ставку (если элемент существует)
@@ -575,7 +700,7 @@ function updateUI() {
 function initNavigation() {
     const navButtons = document.querySelectorAll('.nav-btn');
     navButtons.forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const page = btn.dataset.page;
             switchPage(page);
             
@@ -599,6 +724,11 @@ function switchPage(pageName) {
     if (depositMethods) depositMethods.classList.add('hidden');
     if (withdrawMethods) withdrawMethods.classList.add('hidden');
     
+    // Останавливаем автообновление топа, если уходим со страницы топа
+    if (appState.currentPage === 'top' && pageName !== 'top') {
+        stopTopAutoRefresh();
+    }
+    
     // Показываем нужную страницу
     const targetPage = document.getElementById(`page-${pageName}`);
     if (targetPage) {
@@ -615,6 +745,9 @@ function switchPage(pageName) {
 
 // Загрузить данные для страницы
 async function loadPageData(pageName) {
+    if (pageName === 'settings') {
+        await loadSettings();
+    }
     switch (pageName) {
         case 'play':
             await loadGames();
@@ -631,7 +764,13 @@ async function loadPageData(pageName) {
             await loadProfileData();
             break;
         case 'top':
-            await loadTopData();
+            // Загружаем топ с периодом "day" по умолчанию
+            await loadTopData('players', 'day');
+            // Запускаем автоматическое обновление топа каждые 30 секунд
+            startTopAutoRefresh();
+            break;
+        case 'settings':
+            await loadSettings();
             break;
     }
 }
@@ -665,6 +804,8 @@ async function loadGames() {
         const stickerElement = gamesGrid.querySelector(`[data-sticker="${game.baseSticker}"]`);
         if (stickerElement) {
             try {
+                // Принудительно перезагружаем стикер (очищаем перед загрузкой)
+                stickerElement.innerHTML = '';
                 await loadStickerForElement(stickerElement, game.baseSticker);
             } catch (error) {
                 console.error(`Ошибка загрузки стикера ${game.baseSticker}:`, error);
@@ -699,12 +840,6 @@ async function loadGames() {
 
 // Начать игру
 async function startGame(gameId) {
-    if (gameId === 'slots') {
-        // Для слотов открываем страницу слотов
-        showToast('Слоты в разработке');
-        return;
-    }
-    
     // Открываем страницу игры вместо модального окна
     showGamePage(gameId);
 }
@@ -717,7 +852,8 @@ function showGamePage(gameId) {
         'dart': 'Дартс',
         'bowling': 'Боулинг',
         'football': 'Футбол',
-        'basketball': 'Баскетбол'
+        'basketball': 'Баскетбол',
+        'slots': 'Слоты'
     };
     
     const gameName = gameNames[gameId] || 'Игра';
@@ -734,13 +870,25 @@ function showGamePage(gameId) {
     }
     
     // Инициализируем шаг 1: Выбор ставки
-    initBetStep();
+    const isSlots = gameId === 'slots';
     
-    // Инициализируем шаг 2: Выбор режима
-    initModesStep(gameId);
+    // Для слотов устанавливаем selectedBet из baseBet
+    if (isSlots) {
+        appState.selectedBet = appState.baseBet || 1.0;
+    }
     
-    // Инициализируем шаг 3: Подтверждение
-    initStartStep(gameId);
+    initBetStep({ nextStep: isSlots ? 'slots' : 'modes' });
+    
+    if (!isSlots) {
+        // Инициализируем шаг 2: Выбор режима
+        initModesStep(gameId);
+        
+        // Инициализируем шаг 3: Подтверждение
+        initStartStep(gameId);
+    } else {
+        // Инициализация экрана слотов (визуал + призы)
+        initSlotsStep();
+    }
     
     // Обработчик кнопки "Назад"
     const backBtn = document.getElementById('btn-back-to-games');
@@ -759,7 +907,7 @@ function showGamePage(gameId) {
 
 // Показать конкретный шаг игры
 function showGameStep(stepName) {
-    const steps = ['bet', 'modes', 'start'];
+    const steps = ['bet', 'modes', 'start', 'slots'];
     steps.forEach(step => {
         const stepEl = document.getElementById(`game-step-${step}`);
         if (stepEl) {
@@ -775,8 +923,17 @@ function showGameStep(stepName) {
 }
 
 // Инициализация шага выбора ставки
-function initBetStep() {
-    const betInput = document.getElementById('game-bet-input');
+function initBetStep(options = {}) {
+    const nextStep = options.nextStep || 'modes';
+
+    // Клонируем input, чтобы не накапливались обработчики при повторном открытии страницы игры
+    let betInput = document.getElementById('game-bet-input');
+    if (betInput) {
+        const newBetInput = betInput.cloneNode(true);
+        betInput.parentNode.replaceChild(newBetInput, betInput);
+        betInput = newBetInput;
+    }
+
     if (betInput) {
         betInput.value = appState.baseBet.toFixed(2);
         
@@ -798,9 +955,26 @@ function initBetStep() {
     }
     
     // Кнопки быстрого выбора ставки
-    const betBtnMin = document.getElementById('bet-btn-min');
-    const betBtnBase = document.getElementById('bet-btn-base');
-    const betBtnMax = document.getElementById('bet-btn-max');
+    let betBtnMin = document.getElementById('bet-btn-min');
+    let betBtnBase = document.getElementById('bet-btn-base');
+    let betBtnMax = document.getElementById('bet-btn-max');
+
+    // Клонируем кнопки для сброса обработчиков
+    if (betBtnMin && betBtnMin.parentNode) {
+        const clone = betBtnMin.cloneNode(true);
+        betBtnMin.parentNode.replaceChild(clone, betBtnMin);
+        betBtnMin = clone;
+    }
+    if (betBtnBase && betBtnBase.parentNode) {
+        const clone = betBtnBase.cloneNode(true);
+        betBtnBase.parentNode.replaceChild(clone, betBtnBase);
+        betBtnBase = clone;
+    }
+    if (betBtnMax && betBtnMax.parentNode) {
+        const clone = betBtnMax.cloneNode(true);
+        betBtnMax.parentNode.replaceChild(clone, betBtnMax);
+        betBtnMax = clone;
+    }
     
     if (betBtnMin) {
         betBtnMin.addEventListener('click', () => {
@@ -820,10 +994,12 @@ function initBetStep() {
         });
     }
     
-    // Кнопка "Далее" к выбору режима
+    // Кнопка "Далее"
     const btnNextToModes = document.getElementById('btn-next-to-modes');
-    if (btnNextToModes) {
-        btnNextToModes.addEventListener('click', () => {
+    if (btnNextToModes && btnNextToModes.parentNode) {
+        const btn = btnNextToModes.cloneNode(true);
+        btnNextToModes.parentNode.replaceChild(btn, btnNextToModes);
+        btn.addEventListener('click', () => {
             const betInput = document.getElementById('game-bet-input');
             const bet = parseFloat(betInput?.value || appState.baseBet);
             
@@ -844,7 +1020,12 @@ function initBetStep() {
             }
             
             appState.selectedBet = bet;
-            showGameStep('modes');
+            if (nextStep === 'slots') {
+                initSlotsStep();
+                showGameStep('slots');
+            } else {
+                showGameStep(nextStep);
+            }
         });
     }
     
@@ -1030,7 +1211,17 @@ function updateStartStep() {
     }
 }
 
-// Получить доступные режимы для игры (как в боте)
+// Извлечь коэффициент из названия режима (например, "x1.9" -> 1.9)
+function extractCoefficient(modeName) {
+    const match = modeName.match(/x([\d.]+)/);
+    if (match && match[1]) {
+        return parseFloat(match[1]);
+    }
+    // Если коэффициент не найден, возвращаем 0 (такие режимы будут в начале)
+    return 0;
+}
+
+// Получить доступные режимы для игры (как в боте), отсортированные по возрастанию коэффициентов
 function getGameModes(gameId) {
     const modesMap = {
         'dice': [
@@ -1096,7 +1287,657 @@ function getGameModes(gameId) {
         ]
     };
     
-    return modesMap[gameId] || [{ value: 'even', name: 'Четное' }];
+    const modes = modesMap[gameId] || [{ value: 'even', name: 'Четное' }];
+    
+    // Сортируем режимы по возрастанию коэффициентов
+    return modes.sort((a, b) => {
+        const coeffA = extractCoefficient(a.name);
+        const coeffB = extractCoefficient(b.name);
+        return coeffA - coeffB;
+    });
+}
+
+/* ===== СЛОТЫ (1 прокрут) ===== */
+const SLOT_SYMBOLS = [
+    { key: 'seven', name: '7', src: 'assets/seven.svg', emoji: '7️⃣' },
+    { key: 'grape', name: 'Виноград', src: 'assets/grape.svg', emoji: '🍇' },
+    { key: 'lemon', name: 'Лимон', src: 'assets/lemon.svg', emoji: '🍋' },
+    { key: 'bar', name: 'BAR', src: 'assets/bar.svg', emoji: 'BAR' }
+];
+
+// Множители призов (только комбинации из 3 одинаковых символов)
+const SLOT_MULTIPLIERS = {
+    '777': 20,              // 777 - 20x
+    'grape_grape_grape': 10, // 🍇🍇🍇 - 10x
+    'lemon_lemon_lemon': 7,  // 🍋🍋🍋 - 7x
+    'bar_bar_bar': 5        // BAR BAR BAR - 5x
+};
+
+const slotsUiState = {
+    spinIntervals: [null, null, null],
+    spinTokens: [0, 0, 0],
+    revealTimeouts: []
+};
+
+function getSlotSymbol(key) {
+    return SLOT_SYMBOLS.find(s => s.key === key) || SLOT_SYMBOLS[0];
+}
+
+function normalizeSlotToken(token) {
+    const t = String(token || '').trim();
+    if (!t) return null;
+    const tLower = t.toLowerCase();
+    // Поддержка разных форматов символов
+    if (tLower === '7' || tLower === 'seven' || tLower === 'семь' || t === '7️⃣') return 'seven';
+    if (tLower === 'grape' || tLower === 'виноград' || tLower === 'виног' || t === '🍒' || t === '🍇' || tLower === 'cherry') return 'grape';
+    if (tLower === 'lemon' || tLower === 'лимон' || t === '🍌' || t === '🍋' || tLower === 'banana') return 'lemon';
+    if (tLower === 'bar' || tLower === 'бар' || tLower === 'bak' || t === 'Bar' || t === 'BAR') return 'bar';
+    return null;
+}
+
+// Вычислить выигрыш на основе символов (только комбинации из 3 одинаковых символов)
+function calculateSlotsWin(symbols, bet) {
+    if (!Array.isArray(symbols) || symbols.length !== 3) return 0;
+    
+    const [s1, s2, s3] = symbols.map(normalizeSlotToken);
+    
+    // Проверяем только комбинации из 3 одинаковых символов
+    if (s1 === s2 && s2 === s3) {
+        const comboKey = `${s1}_${s2}_${s3}`;
+        if (comboKey === 'seven_seven_seven') {
+            return bet * SLOT_MULTIPLIERS['777'];
+        } else if (comboKey === 'lemon_lemon_lemon') {
+            return bet * SLOT_MULTIPLIERS['lemon_lemon_lemon'];
+        } else if (comboKey === 'grape_grape_grape') {
+            return bet * SLOT_MULTIPLIERS['grape_grape_grape'];
+        } else if (comboKey === 'bar_bar_bar') {
+            return bet * SLOT_MULTIPLIERS['bar_bar_bar'];
+        }
+    }
+    
+    // Если нет выигрышной комбинации, возвращаем 0
+    return 0;
+}
+
+function extractSlotsSymbols(result) {
+    const candidates =
+        (Array.isArray(result?.symbols) && result.symbols) ||
+        (Array.isArray(result?.throws) && result.throws) ||
+        (Array.isArray(result?.result) && result.result) ||
+        null;
+
+    let raw = [];
+    if (candidates) {
+        raw = candidates;
+    } else if (typeof result?.result === 'string') {
+        raw = result.result.split(/[,\s|/]+/g).filter(Boolean);
+    }
+
+    const normalized = raw
+        .map(normalizeSlotToken)
+        .filter(Boolean);
+
+    if (normalized.length >= 3) return normalized.slice(0, 3);
+
+    // Fallback: случайные символы (чтобы UI не ломался, если бэк пришлет другой формат)
+    const fallback = [];
+    for (let i = 0; i < 3; i++) {
+        fallback.push(SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)].key);
+    }
+    return fallback;
+}
+
+function clearSlotsRevealTimeouts() {
+    slotsUiState.revealTimeouts.forEach(t => clearTimeout(t));
+    slotsUiState.revealTimeouts = [];
+}
+
+function stopAllSlotSpinners() {
+    for (let i = 0; i < 3; i++) {
+        // Инвалидируем все отложенные "тики" для этой строки
+        slotsUiState.spinTokens[i] += 1;
+        if (slotsUiState.spinIntervals[i]) {
+            clearInterval(slotsUiState.spinIntervals[i]);
+            slotsUiState.spinIntervals[i] = null;
+        }
+    }
+}
+
+function setSlotsSpinButtonState() {
+    const btn = document.getElementById('slots-spin-btn');
+    if (!btn) return;
+
+    if (appState.gameInProgress) {
+        btn.disabled = true;
+        btn.textContent = 'Крутим...';
+        return;
+    }
+
+    if (appState.slotsSpinUsed) {
+        btn.disabled = false;
+        btn.textContent = 'Повторить';
+        return;
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Крутить (1 раз)';
+}
+
+function renderSlotsPrizes(bet) {
+    const container = document.getElementById('slots-prizes');
+    if (!container) return;
+
+    const safeBet = Math.max(0, Number(bet) || 0);
+    const dollarIcon = 'assets/dollar-svgrepo-com.svg';
+
+    // Комбинации из 3 символов
+    const combos = [
+        { symbols: ['seven', 'seven', 'seven'], multiplier: SLOT_MULTIPLIERS['777'], name: '777' },
+        { symbols: ['grape', 'grape', 'grape'], multiplier: SLOT_MULTIPLIERS['grape_grape_grape'], name: 'Виноград' },
+        { symbols: ['lemon', 'lemon', 'lemon'], multiplier: SLOT_MULTIPLIERS['lemon_lemon_lemon'], name: 'Лимон' },
+        { symbols: ['bar', 'bar', 'bar'], multiplier: SLOT_MULTIPLIERS['bar_bar_bar'], name: 'BAR' }
+    ];
+
+    container.innerHTML = combos.map(combo => {
+        const sym = getSlotSymbol(combo.symbols[0]);
+        const amount = safeBet * combo.multiplier;
+        return `
+            <div class="slots-prize-item">
+                <div class="slots-prize-left">
+                    <div class="slots-prize-symbols">
+                        <img class="slots-prize-symbol" src="${sym.src}" alt="${sym.name}">
+                        <img class="slots-prize-symbol" src="${sym.src}" alt="${sym.name}">
+                        <img class="slots-prize-symbol" src="${sym.src}" alt="${sym.name}">
+                    </div>
+                    <div class="slots-prize-name">
+                        ${combo.name}<span class="slots-prize-mult">x${combo.multiplier}</span>
+                    </div>
+                </div>
+                <div class="slots-prize-right">
+                    <img class="slots-dollar" src="${dollarIcon}" alt="$">
+                    <span>$${amount.toFixed(2)}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function setSlotsBetDisplay() {
+    // Убеждаемся что selectedBet установлен из baseBet
+    if (!appState.selectedBet || appState.selectedBet === 0) {
+        appState.selectedBet = appState.baseBet || 1.0;
+    }
+    
+    // Обновляем отображение баланса
+    const balanceEl = document.getElementById('slots-balance-amount');
+    if (balanceEl) {
+        balanceEl.textContent = `$${appState.balance.toFixed(2)}`;
+    }
+    
+    // Обновляем отображение ставки
+    const betEl = document.getElementById('slots-bet-amount');
+    if (betEl) {
+        betEl.textContent = `$${appState.selectedBet.toFixed(2)}`;
+    }
+    
+    renderSlotsPrizes(appState.selectedBet);
+    
+    console.log('🎰 Слоты: данные обновлены:', {
+        balance: appState.balance,
+        selectedBet: appState.selectedBet,
+        baseBet: appState.baseBet
+    });
+}
+
+function resetSlotsRows() {
+    clearSlotsRevealTimeouts();
+    stopAllSlotSpinners();
+
+    for (let i = 0; i < 3; i++) {
+        const reel = document.getElementById(`slots-reel-${i}`);
+        const strip = document.getElementById(`slots-strip-${i}`);
+        if (!reel || !strip) continue;
+
+        reel.classList.remove('is-blurred');
+        strip.style.transition = 'none';
+        strip.style.transform = 'translateY(0px)';
+        strip.style.paddingTop = ''; // Сбрасываем padding
+        strip.style.justifyContent = 'flex-start'; // Возвращаем стандартное выравнивание
+        strip.innerHTML = '';
+
+        // Плейсхолдер: 3 символа для каждого барабана (3x3 сетка)
+        for (let j = 0; j < 3; j++) {
+            const placeholder = SLOT_SYMBOLS[(i + j) % SLOT_SYMBOLS.length];
+            const img = document.createElement('img');
+            img.className = 'slots-symbol';
+            img.src = placeholder.src;
+            img.alt = placeholder.name;
+            img.style.opacity = '0.55';
+            strip.appendChild(img);
+        }
+    }
+}
+
+function startRowSpin(rowIndex, targetSymbol = null) {
+    const reel = document.getElementById(`slots-reel-${rowIndex}`);
+    const strip = document.getElementById(`slots-strip-${rowIndex}`);
+    if (!reel || !strip) return;
+
+    reel.classList.add('is-blurred');
+    reel.classList.add('is-spinning');
+    strip.style.transition = 'none';
+    strip.style.transform = 'translateY(0px)';
+    strip.innerHTML = '';
+
+    // Заполняем ленту символами с большим gap между ними
+    const itemsCount = 50; // Больше символов для плавной прокрутки
+    const targetSym = targetSymbol ? getSlotSymbol(targetSymbol) : null;
+    
+    // Создаем ленту, гарантируя что целевой символ будет в нужной позиции
+    for (let i = 0; i < itemsCount; i++) {
+        let sym;
+        // Если это позиция где должен быть целевой символ (ближе к концу), используем его
+        if (targetSym && i >= itemsCount - 8 && i < itemsCount - 2) {
+            sym = targetSym;
+        } else {
+            sym = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
+        }
+        const img = document.createElement('img');
+        img.className = 'slots-symbol';
+        img.src = sym.src;
+        img.alt = sym.name;
+        strip.appendChild(img);
+    }
+
+    // Увеличиваем stepPx для большего расстояния между символами (96px вместо 88px)
+    const stepPx = 96; // высота символа (80px) + увеличенный gap (16px)
+    let position = 0;
+    let speed = 10; // Еще более быстрая скорость для максимальной плавности
+    let busy = false;
+    const token = (slotsUiState.spinTokens[rowIndex] += 1);
+    
+    // Вычисляем целевую позицию для остановки (если есть целевой символ)
+    const targetPosition = targetSym ? (itemsCount - 5) * stepPx : null;
+    
+    const spin = () => {
+        if (busy) return;
+        busy = true;
+
+        position += stepPx;
+        
+        // Если приближаемся к целевой позиции, начинаем замедление
+        let currentSpeed = speed;
+        if (targetPosition && position >= targetPosition - stepPx * 4) {
+            // Замедляем при приближении к цели
+            const distanceToTarget = targetPosition - position;
+            if (distanceToTarget > 0) {
+                currentSpeed = Math.max(speed, Math.min(250, speed + (distanceToTarget / stepPx) * 8));
+            } else if (position >= targetPosition) {
+                // Достигли цели - останавливаемся
+                strip.style.transition = 'none';
+                strip.style.transform = `translateY(-${targetPosition}px)`;
+                busy = false;
+                return;
+            }
+        }
+        
+        // Максимально плавная timing функция
+        strip.style.transition = `transform ${currentSpeed}ms cubic-bezier(0.1, 0, 0.1, 1)`;
+        strip.style.transform = `translateY(-${position}px)`;
+
+        setTimeout(() => {
+            // Если спин уже остановили/перезапустили — выходим
+            if (token !== slotsUiState.spinTokens[rowIndex]) return;
+            
+            // Если достигли целевой позиции, останавливаемся
+            if (targetPosition && position >= targetPosition) {
+                strip.style.transition = 'none';
+                strip.style.transform = `translateY(-${targetPosition}px)`;
+                busy = false;
+                return;
+            }
+            
+            strip.style.transition = 'none';
+            
+            // Сбрасываем позицию и перемещаем элементы для бесконечной прокрутки
+            const currentY = position % (stepPx * itemsCount);
+            strip.style.transform = `translateY(-${currentY}px)`;
+            
+            // Перемещаем элементы для бесконечной прокрутки
+            while (position >= stepPx) {
+                if (strip.lastElementChild) {
+                    strip.insertBefore(strip.lastElementChild, strip.firstElementChild);
+                }
+                position -= stepPx;
+            }
+            
+            // Плавное замедление
+            if (speed < 180) {
+                speed += 0.6;
+            }
+            
+            busy = false;
+        }, currentSpeed + 1);
+    };
+    
+    slotsUiState.spinIntervals[rowIndex] = setInterval(spin, speed);
+}
+
+function startSlotsSpinVisual(targetSymbols = null) {
+    clearSlotsRevealTimeouts();
+    stopAllSlotSpinners();
+    for (let i = 0; i < 3; i++) {
+        const targetSymbol = targetSymbols && targetSymbols[i] ? targetSymbols[i] : null;
+        startRowSpin(i, targetSymbol);
+    }
+}
+
+function stopSingleSlotReel(index, symbolKey) {
+    const reel = document.getElementById(`slots-reel-${index}`);
+    const strip = document.getElementById(`slots-strip-${index}`);
+    if (!reel || !strip) return;
+
+    // Останавливаем спин для этого барабана
+    slotsUiState.spinTokens[index] += 1;
+    if (slotsUiState.spinIntervals[index]) {
+        clearInterval(slotsUiState.spinIntervals[index]);
+        slotsUiState.spinIntervals[index] = null;
+    }
+
+    const sym = getSlotSymbol(symbolKey);
+    
+    // Определяем размеры в зависимости от размера экрана
+    const isMobile = window.innerWidth <= 480;
+    const isSmallMobile = window.innerWidth <= 360;
+    const largeSymbolHeight = isSmallMobile ? 220 : (isMobile ? 200 : 120); // Большой центральный символ
+    const smallSymbolHeight = isSmallMobile ? 100 : (isMobile ? 90 : 50); // Маленькие размытые символы
+    const gap = isSmallMobile ? 28 : (isMobile ? 24 : 16);
+    const windowHeight = isSmallMobile ? 340 : (isMobile ? 320 : 220); // Высота окна барабана
+    const windowCenter = windowHeight / 2; // центр окна
+    const padding = isSmallMobile ? 20 : (isMobile ? 16 : 8); // padding strip
+    
+    // Создаем ленту: только 3 символа - размытый сверху, большой в центре, размытый снизу
+    strip.innerHTML = '';
+    strip.style.transition = 'none';
+    strip.style.justifyContent = 'flex-start'; // Начинаем сверху
+    
+    // Случайный символ сверху (размытый, маленький)
+    const topRandomSym = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
+    const topImg = document.createElement('img');
+    topImg.className = 'slots-symbol slots-symbol-blurred';
+    topImg.src = topRandomSym.src;
+    topImg.alt = topRandomSym.name;
+    // Не устанавливаем inline стили для размеров - используем CSS классы
+    strip.appendChild(topImg);
+    
+    // Большой центральный символ (выигрышный)
+    const targetImg = document.createElement('img');
+    targetImg.className = 'slots-symbol slots-symbol-final slots-symbol-final-large';
+    targetImg.src = sym.src;
+    targetImg.alt = sym.name;
+    // Не устанавливаем inline стили для размеров - используем CSS классы
+    strip.appendChild(targetImg);
+    
+    // Случайный символ снизу (размытый, маленький)
+    const bottomRandomSym = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
+    const bottomImg = document.createElement('img');
+    bottomImg.className = 'slots-symbol slots-symbol-blurred';
+    bottomImg.src = bottomRandomSym.src;
+    bottomImg.alt = bottomRandomSym.name;
+    // Не устанавливаем inline стили для размеров - используем CSS классы
+    strip.appendChild(bottomImg);
+    
+    // Вычисляем позицию чтобы большой символ (индекс 1) был в центре окна или немного ниже
+    // Учитываем padding сверху для смещения вниз
+    const paddingTop = isSmallMobile ? 45 : (isMobile ? 50 : 60); // padding-top из CSS (обновлено)
+    const largeSymbolCenterY = windowCenter + 15; // центр окна + небольшое смещение вниз
+    
+    // Позиция центра большого символа в текущей структуре strip (с учетом padding-top)
+    const topSymbolHeight = paddingTop + smallSymbolHeight + gap; // padding-top + высота верхнего символа + gap
+    const currentLargeSymbolCenterY = topSymbolHeight + (largeSymbolHeight / 2);
+    
+    // Вычисляем смещение для центрирования (отрицательное значение смещает вниз)
+    const offset = currentLargeSymbolCenterY - largeSymbolCenterY;
+    
+    // Плавно центрируем большой символ (смещаем вниз)
+    strip.style.transition = 'transform 600ms cubic-bezier(0.2, 0, 0.2, 1)';
+    // Всегда смещаем вниз для лучшей видимости
+    strip.style.transform = `translateY(-${Math.max(offset, 20)}px)`;
+    
+    // Убираем blur плавно
+    setTimeout(() => {
+        reel.classList.remove('is-blurred');
+        reel.classList.remove('is-spinning');
+    }, 500);
+}
+
+function stopSlotsSpinWithResult(symbolKeys) {
+    // Останавливаем все барабаны сразу (используется при инициализации, когда показываем сохраненные результаты)
+    stopAllSlotSpinners();
+
+    // Определяем размеры в зависимости от размера экрана
+    const isMobile = window.innerWidth <= 480;
+    const isSmallMobile = window.innerWidth <= 360;
+    const largeSymbolHeight = isSmallMobile ? 220 : (isMobile ? 200 : 120); // Большой центральный символ
+    const smallSymbolHeight = isSmallMobile ? 100 : (isMobile ? 90 : 50); // Маленькие размытые символы
+    const gap = isSmallMobile ? 28 : (isMobile ? 24 : 16);
+    const windowHeight = isSmallMobile ? 340 : (isMobile ? 320 : 220); // Высота окна барабана
+    const windowCenter = windowHeight / 2; // центр окна
+    const padding = isSmallMobile ? 20 : (isMobile ? 16 : 8); // padding strip
+
+    for (let i = 0; i < 3; i++) {
+        const reel = document.getElementById(`slots-reel-${i}`);
+        const strip = document.getElementById(`slots-strip-${i}`);
+        if (!reel || !strip) continue;
+
+        const sym = getSlotSymbol(symbolKeys[i]);
+        
+        // Создаем ленту: только 3 символа - размытый сверху, большой в центре, размытый снизу
+        strip.innerHTML = '';
+        strip.style.transition = 'none';
+        strip.style.justifyContent = 'flex-start'; // Начинаем сверху для правильного позиционирования
+        
+        // Случайный символ сверху (размытый, маленький)
+        const topRandomSym = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
+        const topImg = document.createElement('img');
+        topImg.className = 'slots-symbol slots-symbol-blurred';
+        topImg.src = topRandomSym.src;
+        topImg.alt = topRandomSym.name;
+        // Не устанавливаем inline стили для размеров - используем CSS классы
+        strip.appendChild(topImg);
+        
+        // Большой центральный символ (выигрышный)
+        const targetImg = document.createElement('img');
+        targetImg.className = 'slots-symbol slots-symbol-final slots-symbol-final-large';
+        targetImg.src = sym.src;
+        targetImg.alt = sym.name;
+        // Не устанавливаем inline стили для размеров - используем CSS классы
+        strip.appendChild(targetImg);
+        
+        // Случайный символ снизу (размытый, маленький)
+        const bottomRandomSym = SLOT_SYMBOLS[Math.floor(Math.random() * SLOT_SYMBOLS.length)];
+        const bottomImg = document.createElement('img');
+        bottomImg.className = 'slots-symbol slots-symbol-blurred';
+        bottomImg.src = bottomRandomSym.src;
+        bottomImg.alt = bottomRandomSym.name;
+        // Не устанавливаем inline стили для размеров - используем CSS классы
+        strip.appendChild(bottomImg);
+        
+        // Вычисляем позицию чтобы большой символ (индекс 1) был в центре окна или немного ниже
+        // Учитываем padding сверху для смещения вниз
+        const paddingTop = isSmallMobile ? 45 : (isMobile ? 50 : 60); // padding-top из CSS (обновлено)
+        const largeSymbolCenterY = windowCenter + 15; // центр окна + небольшое смещение вниз
+        
+        // Позиция центра большого символа в текущей структуре strip (с учетом padding-top)
+        const topSymbolHeight = paddingTop + smallSymbolHeight + gap; // padding-top + высота верхнего символа + gap
+        const currentLargeSymbolCenterY = topSymbolHeight + (largeSymbolHeight / 2);
+        
+        // Вычисляем смещение для центрирования (отрицательное значение смещает вниз)
+        const offset = currentLargeSymbolCenterY - largeSymbolCenterY;
+        
+        // Плавно центрируем большой символ (смещаем вниз)
+        strip.style.transition = 'transform 600ms cubic-bezier(0.2, 0, 0.2, 1)';
+        // Всегда смещаем вниз для лучшей видимости
+        strip.style.transform = `translateY(-${Math.max(offset, 20)}px)`;
+        
+        reel.classList.remove('is-blurred');
+        reel.classList.remove('is-spinning');
+    }
+}
+
+function revealSlotRow(index) {
+    const reel = document.getElementById(`slots-reel-${index}`);
+    if (reel) {
+        reel.classList.remove('is-blurred');
+        reel.classList.remove('is-spinning');
+        reel.classList.add('is-revealed');
+        
+        // Эффект появления
+        setTimeout(() => {
+            reel.classList.remove('is-revealed');
+        }, 500);
+    }
+}
+
+function initSlotsStep() {
+    // Убеждаемся что selectedBet установлен из baseBet при открытии слотов
+    if (!appState.selectedBet || appState.selectedBet === 0) {
+        appState.selectedBet = appState.baseBet || 1.0;
+    }
+    
+    setSlotsBetDisplay();
+    clearSlotsRevealTimeouts();
+    stopAllSlotSpinners();
+
+    if (appState.slotsSpinUsed && Array.isArray(appState.slotsLastSymbols) && appState.slotsLastSymbols.length >= 3) {
+        stopSlotsSpinWithResult(appState.slotsLastSymbols);
+        revealSlotRow(0);
+        revealSlotRow(1);
+        revealSlotRow(2);
+    } else {
+        resetSlotsRows();
+    }
+    setSlotsSpinButtonState();
+
+    // Кнопка "Крутить"
+    const spinBtn = document.getElementById('slots-spin-btn');
+    if (spinBtn && spinBtn.parentNode) {
+        const btn = spinBtn.cloneNode(true);
+        spinBtn.parentNode.replaceChild(btn, spinBtn);
+        btn.addEventListener('click', async () => {
+            if (appState.gameInProgress) return;
+            
+            // Если прокрут уже использован, сбрасываем состояние для повторной игры
+            if (appState.slotsSpinUsed) {
+                appState.slotsSpinUsed = false;
+                appState.slotsLastSymbols = null;
+                resetSlotsRows();
+                setSlotsSpinButtonState();
+                return;
+            }
+
+            const bet = appState.selectedBet;
+            if (isNaN(bet) || bet < 0.1) {
+                showToast('Минимальная ставка: $0.10');
+                return;
+            }
+            if (bet > 30) {
+                showToast('Максимальная ставка: $30.00');
+                return;
+            }
+            if (appState.balance < bet) {
+                showToast(`Недостаточно средств! Нужно $${bet.toFixed(2)}, у вас $${appState.balance.toFixed(2)}`);
+                return;
+            }
+
+            appState.gameInProgress = true;
+            appState.slotsLastSymbols = null;
+            setSlotsSpinButtonState();
+            startSlotsSpinVisual();
+
+            try {
+                const initData = getInitData();
+                const response = await fetch(`${API_BASE}/game/start`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Telegram-Init-Data': initData || ''
+                    },
+                    body: JSON.stringify({
+                        game_type: 'slots',
+                        bet: bet,
+                        bet_type: 'spin'
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `Ошибка запуска слотов (${response.status})`);
+                }
+
+                const data = await response.json();
+                appState.slotsSpinUsed = true;
+                showToast('Слот отправлен! Результат придёт из бота.');
+                checkGameResult(data.game_id);
+            } catch (e) {
+                console.error('Ошибка запуска слотов:', e);
+                showToast(e.message || 'Ошибка запуска слотов');
+                appState.gameInProgress = false;
+                stopAllSlotSpinners();
+                resetSlotsRows();
+                setSlotsSpinButtonState();
+            }
+        });
+    }
+
+    // Кнопка "Изменить ставку"
+    const backBtn = document.getElementById('slots-back-to-bet');
+    if (backBtn && backBtn.parentNode) {
+        const btn = backBtn.cloneNode(true);
+        backBtn.parentNode.replaceChild(btn, backBtn);
+        btn.addEventListener('click', () => {
+            showGameStep('bet');
+        });
+    }
+}
+
+function handleSlotsGameCompleted(result) {
+    const symbols = extractSlotsSymbols(result);
+    appState.slotsLastSymbols = symbols;
+
+    // Вычисляем выигрыш
+    const win = calculateSlotsWin(symbols, appState.selectedBet);
+    
+    // Поочередно останавливаем барабаны и снимаем blur
+    clearSlotsRevealTimeouts();
+    
+    // Первый барабан останавливается через 0.8 секунды (быстрее)
+    slotsUiState.revealTimeouts.push(setTimeout(() => {
+        stopSingleSlotReel(0, symbols[0]);
+        revealSlotRow(0);
+    }, 800));
+    
+    // Второй барабан останавливается через 1.4 секунды
+    slotsUiState.revealTimeouts.push(setTimeout(() => {
+        stopSingleSlotReel(1, symbols[1]);
+        revealSlotRow(1);
+    }, 1400));
+    
+    // Третий барабан останавливается через 2 секунды
+    slotsUiState.revealTimeouts.push(setTimeout(() => {
+        stopSingleSlotReel(2, symbols[2]);
+        revealSlotRow(2);
+        appState.gameInProgress = false;
+        setSlotsSpinButtonState();
+        
+        // Показываем результат выигрыша
+                if (win > 0) {
+                    playWinSound();
+                    showToast(`Вы выиграли 💎 $${win.toFixed(2)}!`);
+        } else {
+            showToast('К сожалению, вы не выиграли');
+        }
+    }, 2000));
 }
 
 // Запустить игру с параметрами
@@ -1174,7 +2015,7 @@ async function launchGame(gameId, bet, mode) {
 
 // Проверить результат игры
 async function checkGameResult(gameId) {
-    const maxAttempts = 10; // Максимум 5 секунд (10 попыток по 0.5 секунды)
+    const maxAttempts = 40; // Максимум 20 секунд (40 попыток по 0.5 секунды)
     let attempts = 0;
     
     const checkInterval = setInterval(async () => {
@@ -1191,12 +2032,33 @@ async function checkGameResult(gameId) {
                 const data = await response.json();
                 if (data.completed) {
                     clearInterval(checkInterval);
-                    displayGameResult(data);
+                    if (data.game_type === 'slots') {
+                        handleSlotsGameCompleted(data);
+                    } else {
+                        displayGameResult(data);
+                    }
                     // Обновляем баланс
                     await loadUserData();
                 } else if (data.status === 'timeout' || data.status === 'error') {
                     clearInterval(checkInterval);
                     showToast(data.status === 'timeout' ? 'Таймаут ожидания результата' : 'Ошибка игры');
+
+                    // Снимаем блокировки (в т.ч. для слотов)
+                    appState.gameInProgress = false;
+                    if (appState.currentGameId === 'slots') {
+                        appState.slotsSpinUsed = false;
+                        appState.slotsLastSymbols = null;
+                        resetSlotsRows();
+                        setSlotsSpinButtonState();
+                    } else {
+                        const startBtn = document.getElementById('start-game-btn');
+                        if (startBtn) {
+                            startBtn.disabled = false;
+                            startBtn.style.opacity = '1';
+                            startBtn.style.cursor = 'pointer';
+                            startBtn.textContent = 'Начать игру';
+                        }
+                    }
                 }
             }
         } catch (error) {
@@ -1208,12 +2070,19 @@ async function checkGameResult(gameId) {
             showToast('Таймаут ожидания результата');
             // Разблокируем кнопку при таймауте
             appState.gameInProgress = false;
-            const startBtn = document.getElementById('start-game-btn');
-            if (startBtn) {
-                startBtn.disabled = false;
-                startBtn.style.opacity = '1';
-                startBtn.style.cursor = 'pointer';
-                startBtn.textContent = 'Начать игру';
+            if (appState.currentGameId === 'slots') {
+                appState.slotsSpinUsed = false;
+                appState.slotsLastSymbols = null;
+                resetSlotsRows();
+                setSlotsSpinButtonState();
+            } else {
+                const startBtn = document.getElementById('start-game-btn');
+                if (startBtn) {
+                    startBtn.disabled = false;
+                    startBtn.style.opacity = '1';
+                    startBtn.style.cursor = 'pointer';
+                    startBtn.textContent = 'Начать игру';
+                }
             }
         }
     }, 500); // Проверяем каждые 0.5 секунды для быстрого отклика
@@ -1221,22 +2090,36 @@ async function checkGameResult(gameId) {
 
 // Отобразить результат игры
 function displayGameResult(result) {
+    // Логируем для отладки
+    console.log('🎮 displayGameResult вызвана:', {
+        result: result.result,
+        throws: result.throws,
+        throwsType: typeof result.throws,
+        isArray: Array.isArray(result.throws),
+        throwsLength: result.throws ? result.throws.length : 0,
+        gameType: result.game_type
+    });
+    
     // ВАЖНО: Если есть массив throws (результаты каждого броска), используем его для стикеров
     // Иначе используем result (сумму) для обратной совместимости
     let stickerNames = [];
     
-    if (result.throws && Array.isArray(result.throws) && result.throws.length > 1) {
-        // Есть несколько бросков - показываем стикер для каждого броска
-        stickerNames = result.throws.map(throwValue => 
-            getStickerNameForResult(result.game_type, throwValue)
-        );
+    // Проверяем наличие throws и что это массив
+    if (result.throws && Array.isArray(result.throws) && result.throws.length > 0) {
+        // Используем массив throws для создания стикеров
+        console.log('✅ Используем массив throws:', result.throws);
+        stickerNames = result.throws.map(throwValue => {
+            const stickerName = getStickerNameForResult(result.game_type, throwValue);
+            console.log(`  → Бросок ${throwValue} → стикер ${stickerName}`);
+            return stickerName;
+        });
     } else {
-        // Один бросок или старая версия API - используем result
-        const singleResult = result.throws && result.throws.length === 1 
-            ? result.throws[0] 
-            : result.result;
-        stickerNames = [getStickerNameForResult(result.game_type, singleResult)];
+        // Нет throws или это не массив - используем result (сумму) для обратной совместимости
+        console.log('⚠️ throws отсутствует или не массив, используем result:', result.result);
+        stickerNames = [getStickerNameForResult(result.game_type, result.result)];
     }
+    
+    console.log('🎨 Итоговые названия стикеров:', stickerNames);
     
     // Показываем модальное окно с результатом
     showGameResultModal(result, stickerNames);
@@ -1294,10 +2177,104 @@ function getStickerNameForResult(gameType, result) {
     return `${gameType}_${result}`;
 }
 
+// Воспроизвести звук победы
+function playWinSound() {
+    if (localStorage.getItem('soundEnabled') === 'false') return;
+    
+    try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Создаем приятный мелодичный звук победы
+        const frequencies = [523.25, 659.25, 783.99, 1046.50]; // До, Ми, Соль, До (мажорный аккорд)
+        let currentFreq = 0;
+        
+        const playNote = (freq, time, duration) => {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            
+            osc.frequency.value = freq;
+            osc.type = 'sine';
+            
+            gain.gain.setValueAtTime(0.3, time);
+            gain.gain.exponentialRampToValueAtTime(0.01, time + duration);
+            
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            
+            osc.start(time);
+            osc.stop(time + duration);
+        };
+        
+        const now = audioContext.currentTime;
+        frequencies.forEach((freq, i) => {
+            playNote(freq, now + i * 0.1, 0.3);
+        });
+    } catch (e) {
+        console.log('Не удалось воспроизвести звук победы:', e);
+    }
+}
+
+// Воспроизвести звук поражения
+function playLoseSound() {
+    if (localStorage.getItem('soundEnabled') === 'false') return;
+    
+    try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Создаем низкий грустный звук
+        oscillator.frequency.value = 200;
+        oscillator.type = 'sawtooth';
+        
+        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5);
+        
+        // Добавляем второй звук для эффекта
+        setTimeout(() => {
+            const osc2 = audioContext.createOscillator();
+            const gain2 = audioContext.createGain();
+            
+            osc2.connect(gain2);
+            gain2.connect(audioContext.destination);
+            
+            osc2.frequency.value = 150;
+            osc2.type = 'sawtooth';
+            
+            gain2.gain.setValueAtTime(0.15, audioContext.currentTime);
+            gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+            
+            osc2.start(audioContext.currentTime);
+            osc2.stop(audioContext.currentTime + 0.4);
+        }, 200);
+    } catch (e) {
+        console.log('Не удалось воспроизвести звук поражения:', e);
+    }
+}
+
 // Показать модальное окно результата игры
 async function showGameResultModal(result, stickerNames) {
     // Определяем стикер победы/поражения
     const resultStickerName = result.win > 0 ? 'results_win' : 'results_lose';
+    const isWin = result.win > 0;
+    
+    // Воспроизводим звук
+    if (isWin) {
+        playWinSound();
+    } else {
+        playLoseSound();
+    }
     
     // Если stickerNames - строка (старая версия), преобразуем в массив
     if (typeof stickerNames === 'string') {
@@ -1306,35 +2283,36 @@ async function showGameResultModal(result, stickerNames) {
     
     // Создаем временное модальное окно для результата
     const modal = document.createElement('div');
-    modal.className = 'modal active';
+    modal.className = `modal active ${isWin ? 'win' : 'lose'}`;
     modal.id = 'game-result-modal';
     
     // Создаем контейнер для стикеров результатов (несколько стикеров в ряд)
-    const stickersHTML = stickerNames.map(stickerName => 
-        `<div class="result-sticker" data-sticker="${stickerName}" style="display: inline-block; margin: 0 5px;"></div>`
+    const stickersHTML = stickerNames.map((stickerName, index) => 
+        `<div class="result-sticker" data-sticker="${stickerName}" style="display: inline-block; margin: 0 5px; animation-delay: ${index * 0.1}s;"></div>`
     ).join('');
     
     modal.innerHTML = `
         <div class="modal-backdrop"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Результат игры</h2>
+                <h2>🎮 Результат игры</h2>
             </div>
             <div class="modal-body" style="text-align: center;">
-                <div class="result-stickers-container" style="display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 5px; margin: 10px 0;">
+                <div class="result-stickers-container">
                     ${stickersHTML}
                 </div>
-                <div class="win-lose-sticker" data-sticker="${resultStickerName}"></div>
-                <div style="font-size: 24px; margin: 20px 0 10px; color: ${result.win > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">
-                    ${result.win > 0 ? `Выигрыш: $${result.win.toFixed(2)}` : 'Проигрыш'}
-                </div>
-                <div class="result-display" style="font-size: 16px; color: var(--text-secondary); white-space: nowrap; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; padding: 10px 0;">
+                <div class="win-lose-sticker" data-sticker="${resultStickerName}" style="animation-delay: ${stickersHTML.length * 0.1 + 0.1}s;"></div>
+                ${isWin ? 
+                    `<div class="result-win-text">🎉 Выигрыш: $${result.win.toFixed(2)}</div>` : 
+                    `<div class="result-lose-text">😔 Проигрыш</div>`
+                }
+                <div class="result-display-enhanced">
                     Результат: ${result.result}
                 </div>
-                <div style="font-size: 16px; color: var(--text-secondary); margin-top: 5px; margin-bottom: 20px;">
-                    Новый баланс: $${result.new_balance.toFixed(2)}
+                <div class="balance-display-enhanced">
+                    💰 Новый баланс: $${result.new_balance.toFixed(2)}
                 </div>
-                <button class="btn-primary" id="btn-understand-result" style="width: 100%;">Понятно</button>
+                <button class="btn-primary" id="btn-understand-result" style="width: 100%; margin-top: 20px; animation: fadeIn 0.5s ease-out 0.5s both;">Понятно</button>
             </div>
         </div>
     `;
@@ -1349,19 +2327,42 @@ async function showGameResultModal(result, stickerNames) {
     // Загружаем стикер победы/поражения
     await loadStickerForElement(modal.querySelector('.win-lose-sticker'), resultStickerName);
     
+    // Добавляем вибрацию для мобильных устройств
+    if (navigator.vibrate && localStorage.getItem('vibrationEnabled') !== 'false') {
+        if (isWin) {
+            navigator.vibrate([100, 50, 100, 50, 200]); // Паттерн победы
+        } else {
+            navigator.vibrate([200]); // Одиночная вибрация поражения
+        }
+    }
+    
     // Обработчик кнопки "Понятно"
     const understandBtn = document.getElementById('btn-understand-result');
     if (understandBtn) {
         understandBtn.addEventListener('click', () => {
-            modal.remove();
+            modal.style.animation = 'resultModalSlideOut 0.3s ease-in forwards';
+            setTimeout(() => modal.remove(), 300);
         });
     }
     
-    // Закрытие по клику на backdrop (опционально)
+    // Закрытие по клику на backdrop
     modal.querySelector('.modal-backdrop').addEventListener('click', () => {
-        modal.remove();
+        modal.style.animation = 'resultModalSlideOut 0.3s ease-in forwards';
+        setTimeout(() => modal.remove(), 300);
     });
 }
+
+// Добавляем анимацию закрытия модального окна
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes resultModalSlideOut {
+        to {
+            opacity: 0;
+            transform: scale(0.8) translateY(50px);
+        }
+    }
+`;
+document.head.appendChild(style);
 
 // Получить путь к локальному стикеру
 function getLocalStickerPath(stickerName) {
@@ -1419,9 +2420,9 @@ function getLocalStickerPath(stickerName) {
         'basketball_4': 'stickers/basketball/4.tgs',
         'basketball_5': 'stickers/basketball/5.tgs',
         'basketball_base': 'stickers/basketball/base.tgs',
-        
+
         // Слоты
-        'slots_base': 'stickers/slots/base.tgs'
+        'slots_base': 'stickers/slots/base_new.tgs'
     };
     
     return stickerMap[stickerName] || null;
@@ -1442,54 +2443,105 @@ async function loadStickerForElement(element, stickerName) {
         element.style.margin = '0 auto';
     }
     
+    // Очищаем элемент перед загрузкой нового стикера
+    element.innerHTML = '';
+    element.style.opacity = '0';
+    
     // Сначала пробуем загрузить локальный файл из папки stickers
     const localPath = getLocalStickerPath(stickerName);
     if (localPath) {
         try {
-            const response = await fetch(localPath, { method: 'HEAD' });
+            // Добавляем агрессивный cache buster с timestamp и random числом
+            const cacheBuster = `?v=${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            const localPathWithCache = localPath + cacheBuster;
+            
+            console.log(`🔄 Загрузка стикера ${stickerName} с cache buster: ${cacheBuster}`);
+            
+            const response = await fetch(localPath, { method: 'HEAD', cache: 'no-store' });
             if (response.ok) {
                 console.log(`✅ Локальный стикер найден: ${localPath}`);
                 // Проверяем формат файла (GIF или TGS)
-                const isGif = localPath.toLowerCase().endsWith('.gif');
+                const pathLower = localPath.toLowerCase();
+                const isGif = pathLower.endsWith('.gif');
+                const isTgs = pathLower.endsWith('.tgs');
+                
+                console.log(`🔍 Формат локального файла: ${isGif ? 'GIF' : (isTgs ? 'TGS' : 'Unknown')}, путь: ${localPath}`);
+                
                 if (isGif) {
                     // Для GIF файлов создаем img элемент
                     const img = document.createElement('img');
-                    img.src = localPath;
+                    img.src = localPathWithCache; // Используем версию с cache buster
                     img.alt = 'Sticker';
                     img.style.width = stickerSize;
                     img.style.height = stickerSize;
                     img.style.objectFit = 'contain';
                     img.onerror = () => {
+                        console.error('❌ Ошибка загрузки GIF изображения');
                         element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(0,255,136,0.1); border-radius: 20px;"></div>`;
                     };
-                    element.innerHTML = '';
                     element.appendChild(img);
+                    element.style.opacity = '1';
                     return;
-                } else {
+                } else if (isTgs) {
                     // Для TGS файлов используем loadTgsSticker
-                    if (window.lottie && window.pako) {
-                        await loadTgsSticker(element, localPath);
-                        return;
-                    } else {
-                        // Ждем загрузки библиотек
-                        const checkLibs = setInterval(() => {
-                            if (window.lottie && window.pako) {
-                                clearInterval(checkLibs);
-                                loadTgsSticker(element, localPath);
-                            }
-                        }, 100);
-                        setTimeout(() => {
-                            clearInterval(checkLibs);
-                            if (!window.lottie || !window.pako) {
-                                console.error('❌ Библиотеки не загрузились');
-                            }
-                        }, 5000);
-                        return;
+                    console.log('🎬 Определен TGS формат, загружаю через loadTgsSticker');
+                    
+                    // Убеждаемся, что библиотеки загружены
+                    if (!window.lottie || !window.pako) {
+                        console.log('⏳ Ожидание загрузки библиотек lottie/pako...');
+                        await new Promise((resolve) => {
+                            let attempts = 0;
+                            const maxAttempts = 50; // 5 секунд максимум
+                            const checkLibs = setInterval(() => {
+                                attempts++;
+                                if (window.lottie && window.pako) {
+                                    clearInterval(checkLibs);
+                                    console.log('✅ Библиотеки загружены');
+                                    resolve();
+                                } else if (attempts >= maxAttempts) {
+                                    clearInterval(checkLibs);
+                                    console.error('❌ Библиотеки не загрузились за отведенное время');
+                                    resolve();
+                                }
+                            }, 100);
+                        });
                     }
+                    
+                    if (window.lottie && window.pako) {
+                        try {
+                            await loadTgsSticker(element, localPathWithCache);
+                            return;
+                        } catch (error) {
+                            console.error('❌ Ошибка при загрузке TGS стикера:', error);
+                            // Не показываем fallback изображение для TGS - лучше показать ошибку
+                            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(255,0,0,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️ TGS ошибка</div>`;
+                        }
+                    } else {
+                        console.error('❌ Библиотеки lottie или pako не загружены');
+                        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(255,0,0,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️ Библиотеки не загружены</div>`;
+                    }
+                } else {
+                    console.warn(`⚠️ Неизвестный формат файла: ${localPath}, пробуем как TGS`);
+                    // Для файлов без расширения пробуем как TGS (может быть это стикер из API)
+                    if (window.lottie && window.pako) {
+                        try {
+                            await loadTgsSticker(element, localPathWithCache);
+                            return;
+                        } catch (error) {
+                            console.warn('⚠️ Не удалось загрузить как TGS, пробуем как изображение:', error);
+                        }
+                    }
+                    // Fallback на изображение
+                    const img = document.createElement('img');
+                    img.src = localPathWithCache;
+                    img.style.width = stickerSize;
+                    img.style.height = stickerSize;
+                    img.style.objectFit = 'contain';
+                    element.appendChild(img);
                 }
             }
         } catch (e) {
-            console.warn(`⚠️ Локальный стикер не найден: ${localPath}, пробуем через API`);
+            console.warn(`⚠️ Локальный стикер не найден: ${localPath}, пробуем через API`, e);
         }
     }
     
@@ -1512,40 +2564,56 @@ async function loadStickerForElement(element, stickerName) {
                 
                 // Проверяем формат файла по URL и данным
                 const urlLower = stickerUrl.toLowerCase();
-                const isTgs = urlLower.endsWith('.tgs') || 
+                // Для slots_base всегда пробуем как TGS, так как это должен быть TGS стикер
+                const isTgs = stickerName === 'slots_base' || 
+                             urlLower.endsWith('.tgs') || 
                              urlLower.includes('.tgs') ||
+                             urlLower.includes('file_') || // Telegram file URLs обычно TGS
                              data.is_tgs === true;
                 
                 console.log(`🔍 Формат стикера ${stickerName}: ${isTgs ? 'TGS' : 'Image'}`);
+                console.log(`🔍 URL стикера: ${stickerUrl}`);
+                console.log(`🔍 Данные из API:`, data);
                 
                 if (isTgs) {
                     // Для TGS файлов используем loadTgsSticker
+                    console.log('🎬 Загружаю как TGS через loadTgsSticker');
+                    
+                    // Убеждаемся, что библиотеки загружены
+                    if (!window.lottie || !window.pako) {
+                        console.log('⏳ Ожидание загрузки библиотек lottie/pako...');
+                        await new Promise((resolve) => {
+                            let attempts = 0;
+                            const maxAttempts = 50; // 5 секунд максимум
+                            const checkLibs = setInterval(() => {
+                                attempts++;
+                                if (window.lottie && window.pako) {
+                                    clearInterval(checkLibs);
+                                    console.log('✅ Библиотеки загружены');
+                                    resolve();
+                                } else if (attempts >= maxAttempts) {
+                                    clearInterval(checkLibs);
+                                    console.error('❌ Библиотеки не загрузились за отведенное время');
+                                    resolve();
+                                }
+                            }, 100);
+                        });
+                    }
+                    
                     if (window.lottie && window.pako) {
-                        await loadTgsSticker(element, stickerUrl);
+                        try {
+                            await loadTgsSticker(element, stickerUrl);
+                            return;
+                        } catch (error) {
+                            console.error('❌ Ошибка при загрузке TGS стикера через API:', error);
+                            // Не показываем fallback изображение - лучше показать ошибку
+                            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(255,0,0,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️ TGS ошибка</div>`;
+                            return;
+                        }
                     } else {
-                        // Ждем загрузки библиотек
-                        console.log('⏳ Ожидание загрузки библиотек для TGS...');
-                        const checkLibs = setInterval(() => {
-                            if (window.lottie && window.pako) {
-                                clearInterval(checkLibs);
-                                loadTgsSticker(element, stickerUrl);
-                            }
-                        }, 100);
-                        setTimeout(() => {
-                            clearInterval(checkLibs);
-                            if (!window.lottie || !window.pako) {
-                                console.error('❌ Библиотеки не загрузились для TGS стикера');
-                                // Fallback на изображение, если библиотеки не загрузились
-                                const img = document.createElement('img');
-                                img.src = stickerUrl;
-                                img.alt = 'Sticker';
-                                img.style.width = stickerSize;
-                                img.style.height = stickerSize;
-                                img.style.objectFit = 'contain';
-                                element.innerHTML = '';
-                                element.appendChild(img);
-                            }
-                        }, 5000);
+                        console.error('❌ Библиотеки lottie или pako не загружены');
+                        element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(255,0,0,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️ Библиотеки не загружены</div>`;
+                        return;
                     }
                 } else {
                     // Для обычных изображений (PNG, WEBP, GIF и т.д.)
@@ -1588,6 +2656,8 @@ async function loadWalletData() {
     // Обновляем данные пользователя для синхронизации баланса
     await loadUserData();
     updateUI();
+    // Проверяем статус подключения кошелька
+    checkWalletConnectionStatus();
 }
 
 // Инициализация страниц
@@ -1595,6 +2665,7 @@ function initPages() {
     // Кошелек - пополнение/вывод
     const depositBtn = document.getElementById('btn-deposit');
     const withdrawBtn = document.getElementById('btn-withdraw');
+    const connectWalletBtn = document.getElementById('btn-connect-wallet');
     
     if (depositBtn) {
         depositBtn.addEventListener('click', () => {
@@ -1607,6 +2678,26 @@ function initPages() {
             showWithdrawMethods();
         });
     }
+    
+    // Кнопка подключения TON кошелька
+    if (connectWalletBtn) {
+        connectWalletBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('🔗 Нажата кнопка подключения кошелька');
+            try {
+                await connectTONWallet();
+            } catch (error) {
+                console.error('Ошибка при нажатии кнопки:', error);
+                showToast('Ошибка: ' + (error.message || error));
+            }
+        });
+    } else {
+        console.warn('⚠️ Кнопка btn-connect-wallet не найдена!');
+    }
+    
+    // Проверяем статус подключения кошелька при загрузке страницы кошелька
+    checkWalletConnectionStatus();
     
     // Настройки
     document.getElementById('btn-base-bet').addEventListener('click', () => {
@@ -1624,16 +2715,119 @@ function initPages() {
     });
     
     document.getElementById('btn-support').addEventListener('click', () => {
-        tg.openTelegramLink('https://t.me/your_support_bot');
+        // Отправляем команду поддержки в бота через Telegram WebApp API
+        try {
+            // Используем tg.openTelegramLink для открытия бота с командой /start support
+            // Это откроет чат с ботом (в котором открыто мини-приложение) и автоматически отправит команду /start support
+            if (tg && tg.openTelegramLink) {
+                // Открываем бота с параметром start=support
+                // Это автоматически отправит команду /start support в чат с ботом
+                tg.openTelegramLink('tg://resolve?start=support');
+            } else if (tg && tg.sendData) {
+                // Альтернативный способ - отправляем данные боту
+                // Бот должен обработать эти данные и открыть поддержку
+                tg.sendData(JSON.stringify({ action: 'support', command: '/support' }));
+            } else {
+                showToast('Откройте бота и отправьте команду /support');
+            }
+        } catch (error) {
+            console.error('Ошибка при открытии поддержки:', error);
+            showToast('Ошибка при открытии поддержки');
+        }
     });
+
+
+    // Переключатель реферальных уведомлений
+    const refNotificationsToggle = document.getElementById('ref-notifications-toggle');
+    if (refNotificationsToggle) {
+        // Загружаем текущее состояние
+        loadSettings();
+        
+        refNotificationsToggle.addEventListener('change', async (e) => {
+            await toggleRefNotifications(e.target.checked);
+        });
+    }
+
+    // Переключатель звуков
+    const soundToggle = document.getElementById('sound-toggle');
+    if (soundToggle) {
+        soundToggle.checked = localStorage.getItem('soundEnabled') !== 'false';
+        soundToggle.addEventListener('change', (e) => {
+            localStorage.setItem('soundEnabled', e.target.checked);
+            showToast(e.target.checked ? '🔊 Звуки включены' : '🔇 Звуки выключены');
+        });
+    }
+
+    // Переключатель вибрации
+    const vibrationToggle = document.getElementById('vibration-toggle');
+    if (vibrationToggle) {
+        vibrationToggle.checked = localStorage.getItem('vibrationEnabled') !== 'false';
+        vibrationToggle.addEventListener('change', (e) => {
+            localStorage.setItem('vibrationEnabled', e.target.checked);
+            if (e.target.checked && 'vibrate' in navigator) {
+                navigator.vibrate(50);
+            }
+            showToast(e.target.checked ? '📳 Вибрация включена' : '📳 Вибрация выключена');
+        });
+    }
     
     // Модальные окна
     document.querySelectorAll('.modal-close').forEach(btn => {
         btn.addEventListener('click', () => {
             const modalId = btn.dataset.modal;
-            hideModal(modalId);
+            if (modalId === 'modal-deposit-ton') {
+                closeDepositTONModal();
+            } else {
+                hideModal(modalId);
+            }
         });
     });
+    
+    // Закрытие модальных окон при клике на backdrop
+    document.querySelectorAll('.modal-backdrop').forEach(backdrop => {
+        backdrop.addEventListener('click', (e) => {
+            if (e.target === backdrop) {
+                const modal = backdrop.closest('.modal');
+                if (modal) {
+                    const modalId = modal.id;
+                    if (modalId === 'modal-deposit-ton') {
+                        closeDepositTONModal();
+                    } else {
+                        hideModal(modalId);
+                    }
+                }
+            }
+        });
+    });
+    
+    // Обработчик для кнопки подтверждения пополнения TON
+    const depositTONConfirmBtn = document.getElementById('btn-deposit-ton-confirm');
+    if (depositTONConfirmBtn) {
+        depositTONConfirmBtn.addEventListener('click', async () => {
+            await processTONDeposit();
+        });
+    }
+    
+    // Закрытие модального окна при клике на backdrop
+    const depositTONModal = document.getElementById('modal-deposit-ton');
+    if (depositTONModal) {
+        const backdrop = depositTONModal.querySelector('.modal-backdrop');
+        if (backdrop) {
+            backdrop.addEventListener('click', () => {
+                closeDepositTONModal();
+            });
+        }
+        
+        // Обработчик Enter в поле ввода суммы
+        const amountInput = document.getElementById('deposit-ton-amount');
+        if (amountInput) {
+            amountInput.addEventListener('keypress', async (e) => {
+                if (e.key === 'Enter') {
+                    await processTONDeposit();
+                }
+            });
+        }
+    }
     
     // Сохранение базовой ставки
     document.getElementById('save-base-bet').addEventListener('click', async () => {
@@ -1646,175 +2840,1028 @@ function initPages() {
 }
 
 // Показать методы пополнения
-function showDepositMethods() {
-    const depositMethods = document.getElementById('deposit-methods');
-    const withdrawMethods = document.getElementById('withdraw-methods');
+async function showDepositMethods() {
+    const modal = document.getElementById('modal-deposit-methods');
+    const methodsList = document.getElementById('deposit-methods-list');
     
-    // Скрываем методы вывода
-    if (withdrawMethods) withdrawMethods.classList.add('hidden');
+    if (!modal || !methodsList) {
+        console.error('Модальное окно методов пополнения не найдено');
+        showToast('Ошибка: модальное окно не найдено');
+        return;
+    }
     
-    // Показываем методы пополнения
-    if (depositMethods) {
-        depositMethods.classList.remove('hidden');
-        
-        // Если контейнер пустой или не содержит кнопок, создаем их
-        if (!depositMethods.querySelector('.method-btn') || depositMethods.children.length === 0) {
-            depositMethods.innerHTML = `
-        <button class="method-btn" id="deposit-ton">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                <path d="M2 17l10 5 10-5"></path>
-                <path d="M2 12l10 5 10-5"></path>
-            </svg>
-            <span>TON (TON Connect)</span>
-        </button>
-        <button class="method-btn" id="deposit-cryptobot">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
-                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
-            </svg>
-            <span>CryptoBot</span>
-        </button>
-        <button class="method-btn" id="deposit-gifts">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 12 20 22 4 22 4 12"></polyline>
-                <rect x="2" y="7" width="20" height="5"></rect>
-                <line x1="12" y1="22" x2="12" y2="7"></line>
-                <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path>
-                <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path>
-            </svg>
-            <span>Подарки</span>
-        </button>
+    // Показываем индикатор загрузки
+    methodsList.innerHTML = `
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+            <div style="font-size: 48px; margin-bottom: 20px;">⏳</div>
+            <div style="font-size: 16px; font-weight: 500;">Загрузка методов...</div>
+        </div>
     `;
-            
-            // Добавляем обработчики событий
-            const depositTonBtn = document.getElementById('deposit-ton');
-            const depositCryptobotBtn = document.getElementById('deposit-cryptobot');
-            const depositGiftsBtn = document.getElementById('deposit-gifts');
-            
-            if (depositTonBtn) {
-                depositTonBtn.addEventListener('click', () => {
-                    initTONConnect();
-                });
+    
+    // Открываем модальное окно сразу, чтобы показать загрузку
+    showModal('modal-deposit-methods');
+    
+    // Загружаем методы из API
+    try {
+        const response = await fetch(`${API_BASE}/wallet/deposit-methods`, {
+            method: 'GET',
+            headers: {
+                'X-Telegram-Init-Data': getInitData()
             }
-            
-            if (depositCryptobotBtn) {
-                depositCryptobotBtn.addEventListener('click', () => {
-                    showToast('CryptoBot в разработке');
-                });
+        });
+        
+        if (!response.ok) {
+            let errorMessage = `Ошибка ${response.status}`;
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.error || errorData.message || errorMessage;
+                if (errorData.detail) {
+                    errorMessage += `: ${errorData.detail}`;
+                }
+            } catch (e) {
+                // Если не удалось распарсить JSON, используем statusText
+                errorMessage = response.statusText || errorMessage;
             }
-            
-            if (depositGiftsBtn) {
-                depositGiftsBtn.addEventListener('click', async () => {
-                    // Убеждаемся, что контейнер видим перед загрузкой подарков
-                    const depositMethods = document.getElementById('deposit-methods');
-                    if (depositMethods) {
-                        depositMethods.classList.remove('hidden');
-                    }
-                    // Загружаем и показываем подарки
-                    await showGifts(false);
-                });
-            }
+            throw new Error(errorMessage);
         }
+        
+        const data = await response.json();
+        const methods = data.methods || [];
+        
+        // Если методов нет, показываем сообщение
+        if (methods.length === 0) {
+            methodsList.innerHTML = `
+                <div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+                    <div style="font-size: 48px; margin-bottom: 20px;">📭</div>
+                    <div style="font-size: 16px; font-weight: 500;">Методы пополнения пока недоступны</div>
+                </div>
+            `;
+            return;
+        }
+        
+        // Очищаем список
+        methodsList.innerHTML = '';
+        
+        // Создаем кнопки для каждого метода
+        methods.forEach(method => {
+            const methodBtn = document.createElement('button');
+            methodBtn.className = 'method-btn';
+            methodBtn.id = `deposit-${method.id}`;
+            
+            // Иконки для разных методов
+            let iconSvg = '';
+            if (method.id === 'ton') {
+                iconSvg = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                    <path d="M2 17l10 5 10-5"></path>
+                    <path d="M2 12l10 5 10-5"></path>
+                </svg>`;
+            } else if (method.id === 'cryptobot') {
+                iconSvg = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+                </svg>`;
+            } else if (method.id === 'gifts') {
+                iconSvg = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="20 12 20 22 4 22 4 12"></polyline>
+                    <rect x="2" y="7" width="20" height="5"></rect>
+                    <line x1="12" y1="22" x2="12" y2="7"></line>
+                    <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path>
+                    <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path>
+                </svg>`;
+            }
+            
+            methodBtn.innerHTML = `
+                ${iconSvg}
+                <span>${method.icon || ''} ${method.name || method.id}</span>
+            `;
+            
+            // Добавляем обработчик клика
+            methodBtn.addEventListener('click', async () => {
+                hideModal('modal-deposit-methods');
+                if (method.id === 'ton') {
+                    showDepositTONModal();
+                } else if (method.id === 'cryptobot') {
+                    showDepositCryptoBotModal();
+                } else if (method.id === 'gifts') {
+                    await showDepositGiftsModal();
+                }
+            });
+            
+            methodsList.appendChild(methodBtn);
+        });
+    } catch (error) {
+        console.error('Ошибка загрузки методов пополнения:', error);
+        
+        // Определяем тип ошибки для более информативного сообщения
+        let errorTitle = 'Ошибка загрузки методов пополнения';
+        let errorMessage = error.message || 'Не удалось загрузить методы';
+        let errorIcon = '❌';
+        
+        if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+            errorTitle = 'Метод не найден';
+            errorMessage = 'Эндпоинт для методов пополнения не найден на сервере. Возможно, функция еще не реализована.';
+            errorIcon = '🔍';
+        } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+            errorTitle = 'Ошибка авторизации';
+            errorMessage = 'Не удалось авторизоваться. Попробуйте перезагрузить страницу.';
+            errorIcon = '🔐';
+        } else if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
+            errorTitle = 'Ошибка сервера';
+            errorMessage = 'На сервере произошла ошибка. Попробуйте позже.';
+            errorIcon = '⚠️';
+        }
+        
+        // Показываем ошибку внутри модального окна
+        methodsList.innerHTML = `
+            <div style="text-align: center; padding: 40px 20px;">
+                <div style="font-size: 48px; margin-bottom: 20px;">${errorIcon}</div>
+                <div style="font-size: 16px; font-weight: 500; margin-bottom: 10px; color: var(--accent-red);">${errorTitle}</div>
+                <div style="font-size: 14px; color: var(--text-secondary); margin-top: 10px; line-height: 1.5;">${errorMessage}</div>
+                <button class="btn-primary" onclick="showDepositMethods()" style="margin-top: 20px; width: auto; padding: 10px 20px;">
+                    🔄 Попробовать снова
+                </button>
+            </div>
+        `;
+        
+        showToast(errorTitle);
+    }
+}
+
+// Показать модальное окно пополнения через CryptoBot
+async function showDepositCryptoBotModal() {
+    // Создаем модальное окно для выбора суммы
+    const modal = document.createElement('div');
+    modal.className = 'modal active';
+    modal.id = 'modal-deposit-cryptobot';
+    modal.innerHTML = `
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>🏝️ CryptoBot</h2>
+                <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="check-step">
+                    <label>Сумма пополнения (USD):</label>
+                    <input type="number" id="cryptobot-amount" class="input-field" step="0.01" min="0.1" max="${MAX_DEPOSIT || 1000}" placeholder="Введите сумму">
+                    <div style="margin-top: 10px; font-size: 12px; color: var(--text-secondary);">
+                        Минимальная сумма: $0.10
+                    </div>
+                </div>
+                <div class="bet-quick-buttons" style="margin-top: 15px;">
+                    <button class="bet-quick-btn" data-value="1">$1</button>
+                    <button class="bet-quick-btn" data-value="5">$5</button>
+                    <button class="bet-quick-btn" data-value="10">$10</button>
+                    <button class="bet-quick-btn" data-value="20">$20</button>
+                    <button class="bet-quick-btn" data-value="30">$30</button>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-primary" id="btn-cryptobot-confirm">Создать инвойс</button>
+                    <button class="btn-secondary" onclick="this.closest('.modal').remove()">Отмена</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Обработчики быстрого выбора суммы
+    modal.querySelectorAll('.bet-quick-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            modal.querySelectorAll('.bet-quick-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById('cryptobot-amount').value = btn.dataset.value;
+        });
+    });
+    
+    // Обработчик создания инвойса
+    modal.querySelector('#btn-cryptobot-confirm').addEventListener('click', async () => {
+        await processCryptoBotDeposit();
+    });
+    
+    // Закрытие по backdrop
+    modal.querySelector('.modal-backdrop').addEventListener('click', () => {
+        modal.remove();
+    });
+}
+
+// Обработать пополнение через CryptoBot
+async function processCryptoBotDeposit() {
+    const amountInput = document.getElementById('cryptobot-amount');
+    const amount = parseFloat(amountInput?.value);
+    
+    if (!amount || amount < 0.1) {
+        showToast('Минимальная сумма пополнения: $0.10');
+        return;
+    }
+    
+    if (amount > (MAX_DEPOSIT || 1000)) {
+        showToast(`Максимальная сумма пополнения: $${MAX_DEPOSIT || 1000}`);
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/wallet/cryptobot-invoice`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Init-Data': getInitData()
+            },
+            body: JSON.stringify({ amount })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            showToast(errorData.error || 'Ошибка создания инвойса');
+            return;
+        }
+        
+        const data = await response.json();
+        
+        // Открываем ссылку на оплату
+        window.open(data.invoice_url, '_blank');
+        
+        // Закрываем модальное окно
+        document.getElementById('modal-deposit-cryptobot')?.remove();
+        
+        showToast('Инвойс создан! Откройте ссылку для оплаты.');
+        
+        // Можно добавить проверку статуса инвойса через deposit_id
+    } catch (error) {
+        console.error('Ошибка создания инвойса CryptoBot:', error);
+        showToast('Ошибка создания инвойса');
+    }
+}
+
+// Показать модальное окно пополнения подарками
+async function showDepositGiftsModal() {
+    // Загружаем список подарков из API
+    try {
+        const response = await fetch(`${API_BASE}/gifts`, {
+            method: 'GET',
+            headers: {
+                'X-Telegram-Init-Data': getInitData()
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Ошибка загрузки подарков');
+        }
+        
+        const data = await response.json();
+        // Обрабатываем разные форматы ответа API
+        let gifts = [];
+        if (Array.isArray(data)) {
+            gifts = data;
+        } else if (data.gifts && Array.isArray(data.gifts)) {
+            gifts = data.gifts;
+        } else {
+            console.warn('Неожиданный формат данных подарков:', data);
+        }
+        
+        // Создаем модальное окно
+        const modal = document.createElement('div');
+        modal.className = 'modal active';
+        modal.id = 'modal-deposit-gifts';
+        modal.innerHTML = `
+            <div class="modal-backdrop"></div>
+            <div class="modal-content" style="max-width: 90%; max-height: 90vh; overflow-y: auto;">
+                <div class="modal-header">
+                    <h2>🎁 Пополнение подарками</h2>
+                    <button class="modal-close" onclick="this.closest('.modal').remove()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div style="margin-bottom: 20px; text-align: center;">
+                        <a href="https://t.me/arbuzrelayer" target="_blank" class="btn-primary" style="display: inline-block; text-decoration: none;">
+                            ✈️ Отправить подарок
+                        </a>
+                    </div>
+                    <div class="gifts-grid" id="gifts-grid">
+                        ${gifts.length > 0 ? gifts.map(gift => {
+                            const emoji = gift.emoji || '🎁';
+                            const giftName = gift.name || '';
+                            const priceTon = gift.price_ton || gift.price || 0;
+                            const priceTonBlack = gift.price_ton_black || gift.price_black || priceTon;
+                            
+                            // Преобразуем имя подарка в имя файла PNG
+                            const fileName = giftNameToFileName(giftName);
+                            // Путь к изображению из папки nft/png (на Netlify файлы должны быть в mini_app/nft/png/)
+                            const imageUrl = fileName ? `/nft/png/${fileName}.png` : '';
+                            
+                            return `
+                                <div class="gift-item">
+                                    <div class="gift-image-container">
+                                        ${imageUrl ? `
+                                            <img src="${imageUrl}" alt="${giftName}" class="gift-image" 
+                                                 onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='block';"
+                                                 style="width: 100%; height: 100%; object-fit: contain;">
+                                            <div style="font-size: 48px; display: none;">${emoji}</div>
+                                        ` : `
+                                            <div style="font-size: 48px;">${emoji}</div>
+                                        `}
+                                    </div>
+                                    <div class="gift-info">
+                                        <div class="gift-price">${priceTon.toFixed(2)} TON</div>
+                                        <div class="gift-price-black">⚫️ ${priceTonBlack.toFixed(2)} TON</div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('') : '<div style="text-align: center; color: var(--text-secondary);">Подарки временно недоступны</div>'}
+                    </div>
+                    <div style="margin-top: 20px; text-align: center; color: var(--text-secondary); font-size: 12px;">
+                        Отправьте подарок на @arbuzrelayer для пополнения баланса
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Закрытие по backdrop
+        modal.querySelector('.modal-backdrop').addEventListener('click', () => {
+            modal.remove();
+        });
+    } catch (error) {
+        console.error('Ошибка загрузки подарков:', error);
+        showToast('Ошибка загрузки подарков');
     }
 }
 
 // Показать методы вывода
 function showWithdrawMethods() {
-    const depositMethods = document.getElementById('deposit-methods');
-    const withdrawMethods = document.getElementById('withdraw-methods');
+    const modal = document.getElementById('modal-withdraw-methods');
+    const methodsList = document.getElementById('withdraw-methods-list');
     
-    // Скрываем методы пополнения
-    if (depositMethods) depositMethods.classList.add('hidden');
+    if (!modal || !methodsList) {
+        console.error('Модальное окно методов вывода не найдено');
+        return;
+    }
     
-    // Показываем методы вывода
-    if (withdrawMethods) {
-        withdrawMethods.classList.remove('hidden');
+    // Создаем кнопки методов, если их еще нет
+    if (!methodsList.querySelector('.method-btn') || methodsList.children.length === 0) {
+        methodsList.innerHTML = `
+            <button class="method-btn" id="withdraw-ton">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                    <path d="M2 17l10 5 10-5"></path>
+                    <path d="M2 12l10 5 10-5"></path>
+                </svg>
+                <span>TON</span>
+            </button>
+            <button class="method-btn" id="withdraw-gifts">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="20 12 20 22 4 22 4 12"></polyline>
+                    <rect x="2" y="7" width="20" height="5"></rect>
+                    <line x1="12" y1="22" x2="12" y2="7"></line>
+                    <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path>
+                    <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path>
+                </svg>
+                <span style="color: var(--accent-green);">Подарки</span>
+            </button>
+        `;
         
-        // Если контейнер пустой или не содержит кнопок, создаем их
-        if (!withdrawMethods.querySelector('.method-btn') || withdrawMethods.children.length === 0) {
-            withdrawMethods.innerHTML = `
-        <button class="method-btn" id="withdraw-ton">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-                <path d="M2 17l10 5 10-5"></path>
-                <path d="M2 12l10 5 10-5"></path>
-            </svg>
-            <span>TON</span>
-        </button>
-        <button class="method-btn" id="withdraw-gifts">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 12 20 22 4 22 4 12"></polyline>
-                <rect x="2" y="7" width="20" height="5"></rect>
-                <line x1="12" y1="22" x2="12" y2="7"></line>
-                <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path>
-                <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path>
-            </svg>
-            <span>Подарки</span>
-        </button>
-    `;
-            
-            // Добавляем обработчики событий
-            const withdrawTonBtn = document.getElementById('withdraw-ton');
-            const withdrawGiftsBtn = document.getElementById('withdraw-gifts');
-            
-            if (withdrawTonBtn) {
-                withdrawTonBtn.addEventListener('click', () => {
-                    showToast('Вывод TON в разработке');
-                });
-            }
-            
-            if (withdrawGiftsBtn) {
-                withdrawGiftsBtn.addEventListener('click', async () => {
-                    await showGifts(true);
-                });
-            }
+        // Добавляем обработчики событий
+        const withdrawTonBtn = document.getElementById('withdraw-ton');
+        const withdrawGiftsBtn = document.getElementById('withdraw-gifts');
+        
+        if (withdrawTonBtn) {
+            withdrawTonBtn.addEventListener('click', () => {
+                hideModal('modal-withdraw-methods');
+                showToast('Вывод TON в разработке');
+            });
+        }
+        
+        if (withdrawGiftsBtn) {
+            withdrawGiftsBtn.addEventListener('click', async () => {
+                hideModal('modal-withdraw-methods');
+                await showGifts(true);
+            });
         }
     }
+    
+    // Показываем модальное окно
+    showModal('modal-withdraw-methods');
 }
 
-// Инициализация TON Connect
-async function initTONConnect() {
-    try {
-        // Загружаем TON Connect SDK
-        if (typeof TonConnectUI === 'undefined') {
-            // Если SDK не загружен, загружаем его
-            const script = document.createElement('script');
-            script.src = 'https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js';
-            script.onload = () => {
-                initTONConnectUI();
-            };
-            document.head.appendChild(script);
-        } else {
-            initTONConnectUI();
+// Глобальная переменная для TON Connect UI
+let tonConnectUI = null;
+
+// TonConnect UI может экспортироваться по-разному в зависимости от сборки/CDN.
+// Частый вариант для UMD: window.TON_CONNECT_UI.TonConnectUI
+function getTonConnectUIClass() {
+    return (
+        window.TonConnectUI ||
+        (window.TON_CONNECT_UI && window.TON_CONNECT_UI.TonConnectUI) ||
+        (typeof TonConnectUI !== 'undefined' ? TonConnectUI : undefined)
+    );
+}
+
+function isTonConnectUIReady() {
+    return typeof getTonConnectUIClass() !== 'undefined';
+}
+
+// Инициализация TON Connect SDK
+async function initTONConnectSDK() {
+    // Проверяем, загружена ли библиотека
+    if (isTonConnectUIReady()) {
+        return;
+    }
+    
+    // Проверяем, не загружается ли уже скрипт (в HTML или динамически)
+    const existingScript = document.querySelector('script[src*="tonconnect-ui"]');
+    if (existingScript) {
+        // Ждем пока загрузится (максимум 5 секунд)
+        let attempts = 0;
+        while (!isTonConnectUIReady() && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
         }
+        if (isTonConnectUIReady()) {
+            return;
+        }
+    }
+    
+    // Если скрипт уже в HTML, просто ждем
+    if (document.querySelector('script[src*="tonconnect-ui"]')) {
+        let attempts = 0;
+        while (!isTonConnectUIReady() && attempts < 100) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        if (isTonConnectUIReady()) {
+            return;
+        }
+        throw new Error('TonConnectUI не стал доступен после загрузки скрипта (ожидается window.TON_CONNECT_UI.TonConnectUI или window.TonConnectUI)');
+    }
+    
+    // Загружаем скрипт динамически (если не был загружен из HTML)
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        // unpkg иногда блокируется в WebView, jsdelivr обычно стабильнее
+        script.src = 'https://cdn.jsdelivr.net/npm/@tonconnect/ui@latest/dist/tonconnect-ui.min.js';
+        script.async = true;
+        
+        script.onload = () => {
+            // Ждем пока TonConnectUI станет доступен (максимум 10 секунд)
+            let attempts = 0;
+            const checkInterval = setInterval(() => {
+                if (isTonConnectUIReady()) {
+                    clearInterval(checkInterval);
+                    console.log('✅ TON Connect SDK загружен');
+                    resolve();
+                } else if (attempts >= 100) {
+                    clearInterval(checkInterval);
+                    reject(new Error('TonConnectUI не стал доступен после загрузки скрипта'));
+                }
+                attempts++;
+            }, 100);
+        };
+        
+        script.onerror = () => {
+            reject(new Error('Не удалось загрузить TON Connect SDK'));
+        };
+        
+        document.head.appendChild(script);
+    });
+}
+
+// Инициализация TON Connect UI
+async function initTONConnectUI() {
+    try {
+        // Загружаем SDK
+        await initTONConnectSDK();
+        
+        // Проверяем что TonConnectUI доступен (пробуем разные варианты)
+        const TonConnectUIClass = getTonConnectUIClass();
+        if (typeof TonConnectUIClass === 'undefined') {
+            throw new Error('TonConnectUI не загружен. Проверьте подключение к интернету и консоль браузера.');
+        }
+        
+        if (!tonConnectUI) {
+            // Определяем правильный URL для manifest
+            const manifestUrl = window.location.origin + '/tonconnect-manifest.json';
+            console.log('Инициализация TON Connect с manifest:', manifestUrl);
+            
+            try {
+                tonConnectUI = new TonConnectUIClass({
+                    manifestUrl: manifestUrl,
+                    buttonRootId: undefined, // Не используем встроенную кнопку
+                    language: 'ru'
+                });
+
+                // Дожидаемся восстановления сессии (если поддерживается)
+                if (tonConnectUI.connectionRestored && typeof tonConnectUI.connectionRestored.then === 'function') {
+                    try {
+                        await tonConnectUI.connectionRestored;
+                    } catch (e) {
+                        console.warn('⚠️ TON Connect: не удалось восстановить сессию:', e);
+                    }
+                }
+                
+                // Обработка изменений статуса кошелька
+                tonConnectUI.onStatusChange((wallet) => {
+                    if (wallet) {
+                        console.log('TON кошелек подключен:', wallet.account?.address || wallet.address);
+                        updateWalletConnectionUI(wallet);
+                    } else {
+                        console.log('TON кошелек отключен');
+                        updateWalletConnectionUI(null);
+                    }
+                });
+                
+                console.log('✅ TON Connect UI инициализирован');
+            } catch (initError) {
+                console.error('Ошибка создания TonConnectUI:', initError);
+                throw new Error('Не удалось создать TonConnectUI: ' + initError.message);
+            }
+        }
+        
+        return tonConnectUI;
     } catch (error) {
         console.error('Ошибка инициализации TON Connect:', error);
-        showToast('Ошибка подключения к TON Connect');
+        throw error;
     }
 }
 
-function initTONConnectUI() {
+// Подключить TON кошелек
+async function connectTONWallet() {
+    console.log('🚀 Начало подключения TON кошелька...');
     try {
-        const tonConnectUI = new TonConnectUI({
-            manifestUrl: window.location.origin + '/tonconnect-manifest.json'
-        });
+        console.log('📦 Инициализация TON Connect UI...');
+        const ui = await initTONConnectUI();
+        console.log('✅ TON Connect UI инициализирован:', ui);
+
+        // На всякий случай ждём восстановления соединения перед чтением ui.wallet
+        if (ui.connectionRestored && typeof ui.connectionRestored.then === 'function') {
+            try { await ui.connectionRestored; } catch (_) {}
+        }
         
-        // Открываем кошелек для подключения
-        tonConnectUI.openWallet();
+        // Проверяем, подключен ли уже кошелек
+        const wallet = ui.wallet;
+        if (wallet) {
+            console.log('✅ Кошелек уже подключен:', wallet);
+            showToast('Кошелек уже подключен');
+            updateWalletConnectionUI(wallet);
+            return;
+        }
         
-        // Обработка подключения
-        tonConnectUI.onStatusChange((wallet) => {
-            if (wallet) {
-                // Кошелек подключен, можно выполнить транзакцию
-                showToast('TON кошелек подключен');
-                // Здесь можно добавить логику для пополнения
+        // Открываем модальное окно подключения
+        console.log('📱 Открываем модальное окно TON Connect...');
+        showToast('Подключение кошелька...');
+        
+        if (typeof ui.openModal === 'function') {
+            await ui.openModal();
+            console.log('✅ Модальное окно открыто');
+        } else {
+            console.error('❌ ui.openModal не является функцией!', typeof ui.openModal);
+            // Пробуем альтернативный способ
+            if (typeof ui.connectWallet === 'function') {
+                await ui.connectWallet();
+            } else {
+                throw new Error('Метод openModal недоступен. Попробуйте обновить страницу.');
             }
-        });
+        }
+        
+        // Обновляем UI после подключения (через обработчик onStatusChange)
     } catch (error) {
-        console.error('Ошибка TON Connect UI:', error);
-        showToast('Ошибка TON Connect');
+        console.error('❌ Ошибка подключения кошелька:', error);
+        const errorMsg = error.message || error.toString();
+        showToast('Ошибка подключения кошелька: ' + errorMsg);
+        throw error; // Пробрасываем ошибку дальше для обработки
     }
+}
+
+// Проверить статус подключения кошелька
+async function checkWalletConnectionStatus() {
+    try {
+        const ui = await initTONConnectUI();
+        if (ui.connectionRestored && typeof ui.connectionRestored.then === 'function') {
+            try { await ui.connectionRestored; } catch (_) {}
+        }
+        const wallet = ui.wallet;
+        updateWalletConnectionUI(wallet);
+    } catch (error) {
+        console.error('Ошибка проверки статуса кошелька:', error);
+    }
+}
+
+// Отключить TON кошелек
+async function disconnectTONWallet() {
+    console.log('🔌 Отключение TON кошелька...');
+    try {
+        const ui = await initTONConnectUI();
+        if (ui && typeof ui.disconnect === 'function') {
+            await ui.disconnect();
+            console.log('✅ Кошелек отключен');
+            showToast('Кошелек отключен');
+            updateWalletConnectionUI(null);
+        } else {
+            // Если метод disconnect недоступен, просто очищаем состояние
+            console.warn('⚠️ Метод disconnect недоступен, очищаем состояние вручную');
+            updateWalletConnectionUI(null);
+            showToast('Кошелек отключен');
+        }
+    } catch (error) {
+        console.error('❌ Ошибка отключения кошелька:', error);
+        showToast('Ошибка отключения кошелька: ' + (error.message || error));
+    }
+}
+
+// Конвертировать адрес в формат UQ...
+function convertToUQFormat(address) {
+    if (!address) return '';
+    
+    // Если адрес уже в формате UQ, возвращаем как есть
+    if (address.startsWith('UQ')) {
+        return address;
+    }
+    
+    try {
+        // Используем TonWeb для конвертации если доступен
+        if (typeof window.TonWeb !== 'undefined' && window.TonWeb.utils && window.TonWeb.utils.Address) {
+            const TonWeb = window.TonWeb;
+            try {
+                // Создаем объект Address из строки (поддерживает любой формат: EQ, UQ, 0:...)
+                const addressObj = new TonWeb.utils.Address(address);
+                // Конвертируем в user-friendly формат UQ (non-bounceable)
+                // toString параметры: (isUserFriendly, isUrlSafe, isBounceable)
+                // isBounceable = false -> UQ формат (non-bounceable)
+                const uqAddress = addressObj.toString(true, true, false);
+                // Убеждаемся что адрес начинается с UQ
+                if (uqAddress.startsWith('UQ')) {
+                    return uqAddress;
+                } else if (uqAddress.startsWith('EQ')) {
+                    // Если все еще EQ, пытаемся еще раз с явным указанием
+                    return addressObj.toString(true, true, false);
+                }
+                return uqAddress;
+            } catch (e) {
+                console.error('Ошибка конвертации через TonWeb:', e);
+            }
+        }
+        
+        // Fallback: если адрес в формате EQ, просто заменяем префикс на UQ
+        // Это не идеально, но для отображения должно работать
+        if (address.startsWith('EQ')) {
+            return 'UQ' + address.substring(2);
+        }
+        
+        // Если адрес в формате "0:...", конвертируем в UQ формат
+        if (address.includes(':')) {
+            const parts = address.split(':');
+            if (parts.length === 2) {
+                const workchain = parseInt(parts[0]);
+                const hexAddress = parts[1];
+                
+                // Конвертируем hex в bytes
+                const addressBytes = [];
+                for (let i = 0; i < hexAddress.length; i += 2) {
+                    addressBytes.push(parseInt(hexAddress.substr(i, 2), 16));
+                }
+                
+                // Создаем массив: workchain (1 byte) + address (32 bytes)
+                const addressWithWorkchain = [workchain, ...addressBytes];
+                
+                // Конвертируем в base64url
+                const base64 = btoa(String.fromCharCode(...addressWithWorkchain))
+                    .replace(/\+/g, '-')
+                    .replace(/\//g, '_')
+                    .replace(/=/g, '');
+                
+                return 'UQ' + base64;
+            }
+        }
+    } catch (error) {
+        console.error('Ошибка конвертации адреса:', error);
+        // В случае ошибки пытаемся хотя бы заменить EQ на UQ
+        if (address.startsWith('EQ')) {
+            return 'UQ' + address.substring(2);
+        }
+        return address;
+    }
+    
+    return address;
+}
+
+// Обновить UI статуса подключения кошелька
+function updateWalletConnectionUI(wallet) {
+    const statusText = document.getElementById('wallet-status-text');
+    const addressContainer = document.getElementById('wallet-address-container');
+    const addressClickable = document.getElementById('wallet-address');
+    const addressText = document.getElementById('wallet-address-text');
+    const connectBtn = document.getElementById('btn-connect-wallet');
+    
+    if (wallet) {
+        const rawAddress = wallet.account?.address || wallet.address || '';
+        
+        // Конвертируем адрес в формат UQ
+        const address = convertToUQFormat(rawAddress);
+        
+        // Скрываем кнопку подключения
+        if (connectBtn) {
+            connectBtn.classList.add('hidden');
+        }
+        
+        // Показываем адрес кошелька
+        if (addressContainer) {
+            addressContainer.classList.remove('hidden');
+        }
+        if (addressText && address) {
+            // Убеждаемся что адрес начинается с UQ (если все еще EQ, заменяем)
+            let finalAddress = address;
+            if (address.startsWith('EQ')) {
+                finalAddress = 'UQ' + address.substring(2);
+                console.log('Адрес конвертирован из EQ в UQ:', finalAddress);
+            }
+            
+            // Форматируем адрес: показываем UQ и первые символы + ... + последние символы
+            let formattedAddress;
+            if (finalAddress.startsWith('UQ')) {
+                // Для UQ формата показываем: UQ + первые 8 символов после UQ + ... + последние 8 символов
+                const addressPart = finalAddress.substring(2); // Убираем префикс UQ
+                if (addressPart.length <= 16) {
+                    formattedAddress = finalAddress; // Показываем полностью если короткий
+                } else {
+                    const startPart = addressPart.substring(0, 8);
+                    const endPart = addressPart.substring(addressPart.length - 8);
+                    formattedAddress = `UQ${startPart}...${endPart}`;
+                }
+            } else if (finalAddress.length <= 20) {
+                formattedAddress = finalAddress;
+            } else {
+                const startPart = finalAddress.substring(0, 6);
+                const endPart = finalAddress.substring(finalAddress.length - 6);
+                formattedAddress = `${startPart}...${endPart}`;
+            }
+            addressText.textContent = formattedAddress;
+            addressText.title = `Нажмите, чтобы отключить кошелек\nПолный адрес: ${finalAddress}`;
+        }
+        
+        // Удаляем старые обработчики и добавляем новый для отключения
+        if (addressClickable) {
+            // Клонируем элемент чтобы удалить все старые обработчики
+            const newAddressClickable = addressClickable.cloneNode(true);
+            addressClickable.parentNode.replaceChild(newAddressClickable, addressClickable);
+            
+            // Добавляем обработчик клика для отключения
+            newAddressClickable.addEventListener('click', async () => {
+                await disconnectTONWallet();
+            });
+        }
+    } else {
+        // Показываем кнопку подключения
+        if (connectBtn) {
+            connectBtn.classList.remove('hidden');
+        }
+        if (statusText) {
+            statusText.textContent = '🔗 Подключить TON кошелек';
+        }
+        
+        // Скрываем адрес кошелька
+        if (addressContainer) {
+            addressContainer.classList.add('hidden');
+        }
+        if (connectBtn) {
+            connectBtn.style.background = '';
+            connectBtn.style.opacity = '1';
+        }
+    }
+}
+
+// Показать модальное окно для пополнения через TON
+function showDepositTONModal() {
+    const modal = document.getElementById('modal-deposit-ton');
+    if (modal) {
+        modal.classList.add('active');
+        // Сбрасываем форму
+        const amountInput = document.getElementById('deposit-ton-amount');
+        if (amountInput) {
+            amountInput.value = '';
+        }
+    }
+}
+
+// Закрыть модальное окно пополнения TON
+function closeDepositTONModal() {
+    const modal = document.getElementById('modal-deposit-ton');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+// Выполнить пополнение через TON Connect
+async function processTONDeposit() {
+    const amountInput = document.getElementById('deposit-ton-amount');
+    const amount = parseFloat(amountInput?.value);
+    
+    if (!amount || amount <= 0) {
+        showToast('Введите корректную сумму');
+        return;
+    }
+    
+    if (amount < 0.01) {
+        showToast('Минимальная сумма пополнения: 0.01 TON');
+        return;
+    }
+    
+    try {
+        // Получаем адрес для пополнения с API
+        const response = await fetch(`${API_BASE}/wallet/deposit-address`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Init-Data': getInitData()
+            },
+            body: JSON.stringify({
+                amount: amount,
+                currency: 'TON'
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || 'Ошибка получения адреса для пополнения');
+        }
+        
+        const data = await response.json();
+        const depositAddress = data.address || data.deposit_address;
+        
+        if (!depositAddress) {
+            throw new Error('Адрес для пополнения не получен');
+        }
+        
+        // Инициализируем TON Connect UI
+        const ui = await initTONConnectUI();
+        
+        // Проверяем, подключен ли кошелек
+        // TON Connect UI может хранить информацию о кошельке в разных местах
+        const wallet = ui.wallet || ui.account || (ui.connectionRestored && ui.connectionRestored.account);
+        if (!wallet) {
+            // Если кошелек не подключен, открываем модальное окно подключения
+            showToast('Подключите кошелек для пополнения');
+            ui.openModal();
+            return; // Прерываем выполнение, пользователь должен подключить кошелек
+        }
+        
+        // Конвертируем сумму в наноTON (1 TON = 1,000,000,000 наноTON)
+        const amountInNano = Math.floor(amount * 1000000000);
+        
+        // Получаем user_id для memo (комментария транзакции)
+        const userId = appState.user?.id;
+        if (!userId) {
+            throw new Error('User ID не найден');
+        }
+        
+        // Создаем payload с текстовым комментарием (user_id) для автоматического начисления баланса
+        // TON Connect ожидает Base64-encoded BoC для payload
+        const commentText = String(userId);
+        console.log('📝 Создание payload с комментарием (user_id):', commentText);
+        
+        let payloadBase64 = '';
+        
+        // Ждём загрузки библиотеки tonweb (если она ещё не загружена)
+        let attempts = 0;
+        while (attempts < 50 && typeof window.TonWeb === 'undefined') {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+        
+        try {
+            // Используем tonweb для создания правильного BoC
+            if (typeof window.TonWeb === 'undefined') {
+                throw new Error('Библиотека TonWeb не загружена. Проверьте подключение скрипта в HTML.');
+            }
+            
+            const TonWeb = window.TonWeb;
+            
+            // Создаем cell с текстовым комментарием используя tonweb
+            // Формат: opcode 0 (32 бита) + UTF-8 текст
+            const cell = new TonWeb.boc.Cell();
+            cell.bits.writeUint(0, 32); // opcode для текстового комментария
+            cell.bits.writeString(commentText); // текст комментария
+            
+            // Конвертируем в Base64 BoC
+            const bocBytes = await cell.toBoc();
+            payloadBase64 = TonWeb.utils.bytesToBase64(bocBytes);
+            
+            if (!payloadBase64 || payloadBase64.length === 0) {
+                throw new Error('Payload пустой после создания через TonWeb');
+            }
+            
+            console.log('✅ Payload создан через TonWeb, длина:', payloadBase64.length, 'первые 50 символов:', payloadBase64.substring(0, 50));
+        } catch (error) {
+            console.error('❌ Ошибка создания payload через TonWeb:', error);
+            console.error('Доступные глобальные объекты:', Object.keys(window).filter(k => k.toLowerCase().includes('ton')));
+            throw new Error('Не удалось создать payload с комментарием: ' + error.message + '. Убедитесь, что библиотека TonWeb загружена.');
+        }
+        
+        // Создаем транзакцию согласно документации TON Connect
+        // validUntil - время истечения транзакции (5 минут от текущего времени)
+        const transaction = {
+            validUntil: Math.floor(Date.now() / 1000) + 300, // 5 минут
+            messages: [
+                {
+                    address: depositAddress,
+                    amount: amountInNano.toString(), // Сумма в нанотонах как строка
+                    payload: payloadBase64 // Payload с текстовым комментарием (user_id) в формате Base64-encoded BoC
+                }
+            ]
+        };
+        
+        console.log('Отправка транзакции:', {
+            address: depositAddress,
+            amount: amountInNano,
+            amountTON: amount,
+            memo: String(userId),
+            payloadLength: payloadBase64.length,
+            payloadPreview: payloadBase64.substring(0, 50) + '...'
+        });
+        
+        // Отправляем транзакцию
+        const result = await ui.sendTransaction(transaction);
+        
+        console.log('Транзакция отправлена:', result);
+        
+        // Проверяем, что транзакция была успешно отправлена
+        if (!result || !result.boc) {
+            throw new Error('Транзакция не была отправлена');
+        }
+        
+        showToast('Транзакция отправлена! Ожидаем подтверждения...');
+        closeDepositTONModal();
+        
+        // Проверяем статус пополнения на сервере
+        if (data.deposit_id || data.id) {
+            await checkDepositStatus(data.deposit_id || data.id);
+        } else {
+            // Если deposit_id не получен, просто обновляем баланс через задержку
+            setTimeout(async () => {
+                await loadUserData();
+            }, 5000);
+        }
+        
+    } catch (error) {
+        console.error('Ошибка пополнения через TON:', error);
+        
+        // Обработка различных типов ошибок согласно документации
+        const errorMessage = error.message || error.toString();
+        
+        if (errorMessage.includes('User rejected') || 
+            errorMessage.includes('declined') || 
+            errorMessage.includes('rejected')) {
+            showToast('Транзакция отменена пользователем');
+        } else if (errorMessage.includes('timeout') || 
+                   errorMessage.includes('Timeout')) {
+            showToast('Время ожидания истекло');
+        } else if (errorMessage.includes('not connected') || 
+                   errorMessage.includes('wallet')) {
+            showToast('Кошелек не подключен');
+        } else {
+            showToast(errorMessage || 'Ошибка пополнения через TON');
+        }
+    }
+}
+
+// Проверить статус пополнения
+async function checkDepositStatus(depositId) {
+    if (!depositId) return;
+    
+    const maxAttempts = 30; // 30 попыток (60 секунд)
+    let attempts = 0;
+    
+    const checkInterval = setInterval(async () => {
+        attempts++;
+        
+        try {
+            const response = await fetch(`${API_BASE}/wallet/deposit-status/${depositId}`, {
+                headers: {
+                    'X-Telegram-Init-Data': getInitData()
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.status === 'completed' || data.status === 'confirmed' || data.status === 'success') {
+                    clearInterval(checkInterval);
+                    showToast('Пополнение подтверждено!');
+                    await loadUserData();
+                    return;
+                } else if (data.status === 'failed' || data.status === 'error') {
+                    clearInterval(checkInterval);
+                    showToast('Ошибка при обработке пополнения');
+                    return;
+                }
+            }
+        } catch (error) {
+            console.error('Ошибка проверки статуса:', error);
+        }
+        
+        if (attempts >= maxAttempts) {
+            clearInterval(checkInterval);
+            console.log('Превышено максимальное количество попыток проверки статуса');
+        }
+    }, 2000); // Проверяем каждые 2 секунды
 }
 
 // Показать подарки
@@ -1919,9 +3966,10 @@ async function showGifts(isWithdraw = false) {
 
 // Маппинг имен подарков на имена файлов (если имя в конфиге не совпадает с именем файла)
 const GIFT_NAME_TO_FILE_MAP = {
-    'plush pepe': 'jolly-chimp',  // Пример маппинга, если файл называется по-другому
-    'durovs cap': 'khabibs-papakha',  // Пример
-    'precious peach': 'pretty-posy',
+    'plush pepe': 'plush-pepe',
+    'heart locket': 'heart-locket',
+    'durovs cap': 'durovs-cap',
+    'precious peach': 'precious-peach',
     'b-day candle': 'b-day-candle',
     'jack-in-the-box': 'jack-in-the-box',
     'snoop dogg': 'snoop-dogg',
@@ -2021,7 +4069,12 @@ const GIFT_NAME_TO_FILE_MAP = {
     'money pot': 'money-pot',
     'pretty posy': 'pretty-posy',
     'ufc strike': 'ufc-strike',
-    'khabibs papakha': 'khabibs-papakha'
+    'khabibs papakha': 'khabibs-papakha',
+    'signet ring': 'signet-ring',
+    'spiced wine': 'spiced-wine',
+    'santa hat': 'santa-hat',
+    'jolly chimp': 'jolly-chimp',
+    'jelly bunny': 'jelly-bunny'
 };
 
 // Преобразовать имя подарка в имя файла
@@ -2257,17 +4310,29 @@ function displayLotteries(lotteries) {
         return;
     }
     
-    listContainer.innerHTML = lotteries.map(lottery => `
+    listContainer.innerHTML = lotteries.map(lottery => {
+        const userTickets = lottery.user_tickets !== undefined ? lottery.user_tickets : 0;
+        const maxTickets = lottery.max_tickets_per_user || 999;
+        const canBuy = userTickets < maxTickets;
+        const buttonText = canBuy ? 'Участвовать' : 'Лимит достигнут';
+        const buttonClass = canBuy ? 'btn-primary' : 'btn-primary';
+        const buttonStyle = canBuy ? '' : 'opacity: 0.6; cursor: not-allowed;';
+        
+        return `
         <div class="lottery-item" style="background: var(--bg-card); border: 2px solid var(--border-color); border-radius: 12px; padding: 15px; margin-bottom: 10px;">
             <h3 style="margin-bottom: 10px;">${lottery.title}</h3>
             <p style="color: var(--text-secondary); margin-bottom: 10px;">${lottery.description}</p>
             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                <span>Билетов: ${lottery.total_tickets}</span>
-                <span>Цена: $${lottery.ticket_price.toFixed(2)}</span>
+                <span>Ваши билеты: <b>${userTickets}/${maxTickets}</b></span>
+                <span>Цена: <b>$${lottery.ticket_price.toFixed(2)}</b></span>
             </div>
-            <button class="btn-primary" onclick="participateLottery(${lottery.id})">Участвовать</button>
+            <div style="margin-bottom: 10px; color: var(--text-secondary); font-size: 0.9em;">
+                Всего билетов: ${lottery.total_tickets || 0}
+            </div>
+            <button class="${buttonClass}" onclick="${canBuy ? `participateLottery(${lottery.id})` : ''}" style="${buttonStyle}" ${!canBuy ? 'disabled' : ''}>${buttonText}</button>
         </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 // Участвовать в лотерее
@@ -2286,7 +4351,13 @@ async function participateLottery(lotteryId) {
         
         if (response.ok) {
             showToast('Вы участвуете в лотерее!');
+            // Обновляем данные пользователя
             await loadUserData();
+            // Перезагружаем список лотерей чтобы обновить количество билетов
+            await loadLotteries();
+        } else {
+            const errorData = await response.json().catch(() => ({ error: 'Неизвестная ошибка' }));
+            showToast(errorData.error || 'Ошибка участия в лотерее');
         }
     } catch (error) {
         console.error('Ошибка участия в лотерее:', error);
@@ -2311,33 +4382,24 @@ async function loadProfileData() {
             const data = await response.json();
             console.log('Данные профиля получены:', data);
             
+            // Реферальная система
             const referralCountEl = document.getElementById('referral-count');
             const referralBalanceEl = document.getElementById('referral-balance');
             const referralLinkEl = document.getElementById('referral-link');
             
             if (referralCountEl) {
                 referralCountEl.textContent = data.referral_count || 0;
-            } else {
-                console.warn('Элемент referral-count не найден');
             }
             
             if (referralBalanceEl) {
                 referralBalanceEl.textContent = `$${(data.referral_balance || 0).toFixed(2)}`;
-            } else {
-                console.warn('Элемент referral-balance не найден');
             }
             
             if (referralLinkEl) {
                 referralLinkEl.value = data.referral_link || '';
-                console.log('Реферальная ссылка установлена:', data.referral_link);
-                
-                // Если ссылка пустая, показываем предупреждение
-                if (!data.referral_link) {
-                    console.warn('Реферальная ссылка пустая!');
-                }
-            } else {
-                console.error('Элемент referral-link не найден!');
             }
+            
+            
         } else {
             const errorData = await response.json().catch(() => ({}));
             console.error('Ошибка загрузки профиля:', response.status, errorData);
@@ -2347,9 +4409,48 @@ async function loadProfileData() {
     }
 }
 
+// Анимация числовых значений
+function animateValue(element, start, end, duration, isCurrency = false) {
+    const startTime = performance.now();
+    const prefix = isCurrency ? '$' : '';
+    const suffix = isCurrency ? '.00' : '';
+    
+    function update(currentTime) {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        
+        // Используем easing функцию для плавной анимации
+        const easeOutQuart = 1 - Math.pow(1 - progress, 4);
+        const current = Math.floor(start + (end - start) * easeOutQuart);
+        
+        if (isCurrency) {
+            element.textContent = `${prefix}${current.toFixed(2)}`;
+        } else {
+            element.textContent = current;
+        }
+        
+        if (progress < 1) {
+            requestAnimationFrame(update);
+        } else {
+            if (isCurrency) {
+                element.textContent = `${prefix}${end.toFixed(2)}`;
+            } else {
+                element.textContent = end;
+            }
+        }
+    }
+    
+    requestAnimationFrame(update);
+}
+
+
 // Загрузить данные топа
 async function loadTopData(category = 'players', period = 'day') {
     try {
+        // Сохраняем текущие параметры для автообновления
+        appState.currentTopCategory = category;
+        appState.currentTopPeriod = period;
+        
         const response = await fetch(`${API_BASE}/top?category=${category}&period=${period}`, {
             headers: {
                 'X-Telegram-Init-Data': tg.initData
@@ -2358,48 +4459,276 @@ async function loadTopData(category = 'players', period = 'day') {
         
         if (response.ok) {
             const data = await response.json();
-            displayTop(data);
+            // Данные пользователя теперь приходят вместе с топом
+            const userData = data.user || { position: null, turnover: 0 };
+            displayTop(data, userData);
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            showToast(errorData.error || 'Ошибка загрузки топа');
         }
     } catch (error) {
         console.error('Ошибка загрузки топа:', error);
+        showToast('Ошибка загрузки топа');
     }
 }
 
+// Запустить автоматическое обновление топа
+function startTopAutoRefresh() {
+    // Останавливаем предыдущий интервал, если он был
+    stopTopAutoRefresh();
+    
+    // Показываем индикатор автообновления
+    const indicator = document.getElementById('top-refresh-status');
+    if (indicator) {
+        indicator.textContent = '🔄 Автообновление';
+        indicator.style.opacity = '1';
+    }
+    
+    // Обновляем топ каждые 30 секунд
+    appState.topRefreshInterval = setInterval(() => {
+        // Обновляем только если мы на странице топа
+        if (appState.currentPage === 'top') {
+            // Показываем анимацию обновления
+            const statusEl = document.getElementById('top-refresh-status');
+            if (statusEl) {
+                statusEl.textContent = '⏳ Обновление...';
+            }
+            
+            loadTopData(appState.currentTopCategory, appState.currentTopPeriod).then(() => {
+                // После загрузки возвращаем обычный статус
+                if (statusEl && appState.currentPage === 'top') {
+                    statusEl.textContent = '🔄 Автообновление';
+                }
+            });
+        }
+    }, 30000); // 30 секунд
+}
+
+// Остановить автоматическое обновление топа
+function stopTopAutoRefresh() {
+    if (appState.topRefreshInterval) {
+        clearInterval(appState.topRefreshInterval);
+        appState.topRefreshInterval = null;
+    }
+    
+    // Скрываем индикатор автообновления
+    const indicator = document.getElementById('top-refresh-status');
+    if (indicator) {
+        indicator.style.opacity = '0.5';
+    }
+}
+
+// Получить аватар пользователя
+function getUserAvatar(userId, photoUrlFromApi = null) {
+    // Если аватар пришел из API, используем его
+    if (photoUrlFromApi) {
+        return photoUrlFromApi;
+    }
+    
+    // Пытаемся получить аватар из Telegram WebApp
+    if (window.Telegram && window.Telegram.WebApp) {
+        // Для текущего пользователя используем данные из WebApp
+        if (window.Telegram.WebApp.initDataUnsafe && window.Telegram.WebApp.initDataUnsafe.user) {
+            const currentUserId = window.Telegram.WebApp.initDataUnsafe.user.id;
+            if (userId == currentUserId) {
+                return window.Telegram.WebApp.initDataUnsafe.user.photo_url || '';
+            }
+        }
+    }
+    // Для других пользователей возвращаем пустую строку (будет показан placeholder)
+    return '';
+}
+
 // Отобразить топ
-function displayTop(data) {
+function displayTop(data, userData = {}) {
+    // Сохраняем данные топа для использования в модальном окне
+    window.currentTopData = data;
+    
     const topList = document.getElementById('top-list');
+    const topPodium = document.getElementById('top-podium');
+    const userPositionEl = document.getElementById('user-position');
+    const userTurnoverEl = document.getElementById('user-turnover');
     
-    topList.innerHTML = data.top.map((item, index) => `
-        <div class="top-item" onclick="showUserProfile(${item.user_id})">
-            <div class="top-item-position">#${index + 1}</div>
-            <div class="top-item-name">${item.username || `ID${item.user_id}`}</div>
-            <div class="top-item-value">$${item.turnover.toFixed(2)}</div>
-        </div>
-    `).join('');
+    // Проверяем, есть ли сообщение о том, что топ чатов не реализован
+    if (data.message) {
+        topPodium.innerHTML = '';
+        topList.innerHTML = `<div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+            <div style="font-size: 48px; margin-bottom: 20px;">🚧</div>
+            <div style="font-size: 16px; font-weight: 500; margin-bottom: 10px;">${data.message}</div>
+        </div>`;
+        if (userPositionEl) userPositionEl.textContent = '-';
+        if (userTurnoverEl) userTurnoverEl.textContent = '$0.00';
+        return;
+    }
     
-    // Инициализируем фильтры
-    document.querySelectorAll('.btn-filter').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            loadTopData(btn.dataset.category, 'day');
+    // Обновляем статистику пользователя
+    if (userPositionEl) {
+        userPositionEl.textContent = `#${userData.position || '-'}`;
+    }
+    if (userTurnoverEl) {
+        userTurnoverEl.textContent = `$${(userData.turnover || 0).toFixed(2)}`;
+    }
+    
+    const topPlayers = data.top || [];
+    const currentUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+    
+    // Если топ пустой, показываем сообщение
+    if (topPlayers.length === 0) {
+        topPodium.innerHTML = '';
+        topList.innerHTML = `<div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+            <div style="font-size: 48px; margin-bottom: 20px;">📊</div>
+            <div style="font-size: 16px; font-weight: 500;">Пока нет данных для отображения</div>
+        </div>`;
+        return;
+    }
+    
+    // Подиум для топ-3
+    if (topPodium && topPlayers.length >= 3) {
+        const podiumPlayers = [
+            topPlayers[1], // 2 место (серебро) - слева
+            topPlayers[0], // 1 место (золото) - центр
+            topPlayers[2]  // 3 место (бронза) - справа
+        ];
+        
+        topPodium.innerHTML = podiumPlayers.map((item, podiumIndex) => {
+            const actualRank = podiumIndex === 0 ? 2 : (podiumIndex === 1 ? 1 : 3);
+            const avatar = getUserAvatar(item.user_id, item.photo_url);
+            
+            return `
+                <div class="podium-item" onclick="showUserProfile(${item.user_id})">
+                    <div class="podium-rank">#${actualRank}</div>
+                    ${avatar ? `<img src="${avatar}" alt="${item.username}" class="podium-avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                    ${!avatar ? `<div class="podium-avatar" style="background: linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,200,255,0.2)); display: flex; align-items: center; justify-content: center;">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                        </svg>
+                    </div>` : ''}
+                    <div class="podium-name">${escapeHtml(item.username || `ID${item.user_id}`)}</div>
+                    <div class="podium-value">$${item.turnover.toFixed(2)}</div>
+                </div>
+            `;
+        }).join('');
+    } else if (topPodium) {
+        topPodium.innerHTML = '';
+    }
+    
+    // Список остальных участников (начиная с 4 места)
+    const remainingPlayers = topPlayers.slice(3);
+    
+    topList.innerHTML = remainingPlayers.map((item, index) => {
+        const rank = index + 4; // Начинаем с 4 места
+        const isCurrentUser = currentUserId && item.user_id == currentUserId;
+        const avatar = getUserAvatar(item.user_id, item.photo_url);
+        
+        return `
+            <div class="top-item ${isCurrentUser ? 'current-user' : ''}" onclick="showUserProfile(${item.user_id})" style="animation-delay: ${index * 0.05}s">
+                <div class="top-item-position">#${rank}</div>
+                ${avatar ? `<img src="${avatar}" alt="${item.username}" class="top-item-avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                ${!avatar ? `<div class="top-item-avatar" style="background: linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,200,255,0.2)); display: flex; align-items: center; justify-content: center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                </div>` : ''}
+                <div class="top-item-info">
+                    <div class="top-item-name">${escapeHtml(item.username || `ID${item.user_id}`)}${isCurrentUser ? ' (Вы)' : ''}</div>
+                    <div class="top-item-stats">Оборот: $${item.turnover.toFixed(2)}</div>
+                </div>
+                <div class="top-item-value">$${item.turnover.toFixed(2)}</div>
+            </div>
+        `;
+    }).join('');
+    
+    // Если пользователь не в топ-3, но есть в списке, прокручиваем к нему
+    if (currentUserId && remainingPlayers.some(p => p.user_id == currentUserId)) {
+        setTimeout(() => {
+            const userItem = topList.querySelector('.current-user');
+            if (userItem) {
+                userItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 500);
+    }
+    
+    // Инициализируем фильтры (только один раз)
+    if (!window.topFiltersInitialized) {
+        document.querySelectorAll('.btn-filter').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.btn-filter').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const period = document.querySelector('.btn-period.active')?.dataset.period || appState.currentTopPeriod || 'day';
+                loadTopData(btn.dataset.category, period);
+                // Перезапускаем автообновление с новыми параметрами
+                startTopAutoRefresh();
+            });
         });
-    });
-    
-    document.querySelectorAll('.btn-period').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.btn-period').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            const category = document.querySelector('.btn-filter.active')?.dataset.category || 'players';
-            loadTopData(category, btn.dataset.period);
+        
+        document.querySelectorAll('.btn-period').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.btn-period').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const category = document.querySelector('.btn-filter.active')?.dataset.category || appState.currentTopCategory || 'players';
+                loadTopData(category, btn.dataset.period);
+                // Перезапускаем автообновление с новыми параметрами
+                startTopAutoRefresh();
+            });
         });
-    });
+        
+        window.topFiltersInitialized = true;
+    }
+}
+
+// Экранирование HTML для безопасности
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // Показать профиль пользователя
 function showUserProfile(userId) {
-    showToast(`Профиль пользователя #${userId}`);
-    // Здесь можно открыть модальное окно с профилем
+    // Находим данные пользователя из текущего топа
+    const topData = window.currentTopData || { top: [] };
+    const userData = topData.top.find(u => u.user_id == userId);
+    
+    if (!userData) {
+        showToast('Данные пользователя не найдены');
+        return;
+    }
+    
+    // Получаем аватар (используем photo_url из данных пользователя если есть)
+    const avatar = getUserAvatar(userId, userData?.photo_url);
+    
+    // Заполняем модальное окно
+    const modal = document.getElementById('modal-user-profile');
+    const avatarEl = document.getElementById('profile-modal-avatar');
+    const placeholderEl = avatarEl.nextElementSibling;
+    const nameEl = document.getElementById('profile-modal-name');
+    const idEl = document.getElementById('profile-modal-id');
+    const positionEl = document.getElementById('profile-modal-position');
+    const turnoverEl = document.getElementById('profile-modal-turnover');
+    
+    // Устанавливаем аватар
+    if (avatar) {
+        avatarEl.src = avatar;
+        avatarEl.style.display = 'block';
+        placeholderEl.style.display = 'none';
+    } else {
+        avatarEl.style.display = 'none';
+        placeholderEl.style.display = 'flex';
+    }
+    
+    // Устанавливаем данные
+    nameEl.textContent = userData.username || `ID${userId}`;
+    idEl.textContent = `ID: ${userId}`;
+    
+    // Находим позицию пользователя
+    const position = topData.top.findIndex(u => u.user_id == userId) + 1;
+    positionEl.textContent = `#${position}`;
+    turnoverEl.textContent = `$${userData.turnover.toFixed(2)}`;
+    
+    // Показываем модальное окно
+    showModal('modal-user-profile');
 }
 
 // Сохранить базовую ставку
@@ -2422,7 +4751,8 @@ async function saveBaseBet(value) {
             // Обновляем данные пользователя для синхронизации
             await loadUserData();
             updateUI();
-            showToast('Базовая ставка сохранена');
+            updateSettingsUI();
+            showToast('✅ Базовая ставка сохранена');
         } else {
             const errorData = await response.json().catch(() => ({}));
             showToast(errorData.error || 'Ошибка сохранения ставки');
@@ -2430,6 +4760,80 @@ async function saveBaseBet(value) {
     } catch (error) {
         console.error('Ошибка сохранения базовой ставки:', error);
         showToast('Ошибка сохранения');
+    }
+}
+
+// Загрузить настройки
+async function loadSettings() {
+    try {
+        if (!appState.user || !appState.user.id) {
+            await loadUserData();
+        }
+        
+        // Загружаем реферальные уведомления
+        const refNotificationsToggle = document.getElementById('ref-notifications-toggle');
+        if (refNotificationsToggle && appState.user) {
+            refNotificationsToggle.checked = appState.user.referral_notifications || false;
+        }
+        
+        // Обновляем UI настроек
+        updateSettingsUI();
+    } catch (error) {
+        console.error('Ошибка загрузки настроек:', error);
+    }
+}
+
+// Обновить UI настроек
+function updateSettingsUI() {
+    // Обновляем базовую ставку
+    const baseBetValue = document.getElementById('base-bet-value');
+    if (baseBetValue && appState.baseBet) {
+        baseBetValue.textContent = `$${appState.baseBet.toFixed(2)}`;
+    }
+}
+
+// Переключить реферальные уведомления
+async function toggleRefNotifications(enabled) {
+    try {
+        const response = await fetch(`${API_BASE}/settings/ref-notifications`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Init-Data': tg.initData
+            },
+            body: JSON.stringify({
+                referral_notifications: enabled
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (appState.user) {
+                appState.user.referral_notifications = data.referral_notifications || enabled;
+            }
+            showToast(enabled ? '🔔 Реферальные уведомления включены' : '🔕 Реферальные уведомления выключены');
+            
+            // Вибрация при переключении
+            if (localStorage.getItem('vibrationEnabled') !== 'false' && 'vibrate' in navigator) {
+                navigator.vibrate(30);
+            }
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            showToast(errorData.error || 'Ошибка сохранения настройки');
+            // Возвращаем переключатель в исходное состояние
+            const toggle = document.getElementById('ref-notifications-toggle');
+            if (toggle) {
+                toggle.checked = !enabled;
+            }
+        }
+    } catch (error) {
+        console.error('Ошибка переключения реферальных уведомлений:', error);
+        showToast('Ошибка сохранения');
+        // Возвращаем переключатель в исходное состояние
+        const toggle = document.getElementById('ref-notifications-toggle');
+        if (toggle) {
+            toggle.checked = !enabled;
+        }
     }
 }
 

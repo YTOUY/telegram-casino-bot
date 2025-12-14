@@ -4,3 +4,8 @@
   Referrer-Policy: no-referrer-when-downgrade
   Permissions-Policy: geolocation=(), microphone=(), camera=()
 
+/stickers/*
+  Cache-Control: no-cache, no-store, must-revalidate
+  Pragma: no-cache
+  Expires: 0
+

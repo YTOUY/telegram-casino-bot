@@ -88,7 +88,8 @@ exports.handler = async (event, context) => {
             console.log('API response:', {
                 status: response.status,
                 contentType: contentType,
-                dataLength: data.length
+                dataLength: data.length,
+                url: fullUrl
             });
 
             return {
@@ -101,6 +102,15 @@ exports.handler = async (event, context) => {
             };
         } catch (fetchError) {
             clearTimeout(timeoutId);
+            
+            // Логируем детальную информацию об ошибке
+            console.error('Fetch error:', {
+                message: fetchError.message,
+                name: fetchError.name,
+                url: fullUrl,
+                method: event.httpMethod
+            });
+            
             throw fetchError;
         }
     } catch (error) {
