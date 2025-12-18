@@ -4549,19 +4549,14 @@ body {
     width: 35%;
     height: 35%;
     border-radius: 50%;
-    background: radial-gradient(circle at 30% 30%, 
-        rgba(0, 0, 0, 0.9), 
-        rgba(20, 20, 20, 0.8),
-        rgba(0, 0, 0, 0.95));
+    background: #1a1a1a;
     border: 2px solid #444444;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     z-index: 5;
-    box-shadow: 
-        0 0 20px rgba(0, 0, 0, 0.8),
-        inset 0 0 30px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
 }
 
 /* Счетчик */

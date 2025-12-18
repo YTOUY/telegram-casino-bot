@@ -5081,66 +5081,72 @@ function drawRouletteWheel() {
     // Вычисляем размеры секторов на основе процентов ставок
     const sectorSizes = calculateSectorSizes();
     
-    // Рисуем секторы с учетом процентов
+    // Цвета для секторов (разные цвета для разных игроков)
+    const sectorColors = [
+        ['#7DD3FC', '#0EA5E9'], // Голубой
+        ['#FBBF24', '#F59E0B'], // Оранжевый
+        ['#F9A8D4', '#EC4899'], // Розовый
+        ['#A78BFA', '#8B5CF6'], // Фиолетовый
+        ['#34D399', '#10B981'], // Зеленый
+        ['#F87171', '#EF4444'], // Красный
+        ['#60A5FA', '#3B82F6'], // Синий
+        ['#FCD34D', '#FBBF24'], // Желтый
+        ['#A7F3D0', '#6EE7B7'], // Светло-зеленый
+        ['#C7D2FE', '#818CF8'], // Индиго
+        ['#FBCFE8', '#F472B6'], // Пинк
+        ['#BFDBFE', '#60A5FA']  // Светло-синий
+    ];
+    
+    // Рисуем только секторы со ставками
     let currentAngle = -Math.PI / 2;
+    let sectorColorIndex = 0;
+    
     for (let i = 0; i < rouletteState.sectors; i++) {
-        const sectorSize = sectorSizes[i] || (1 / rouletteState.sectors);
+        const sectorSize = sectorSizes[i];
+        
+        // Пропускаем секторы без ставок (размер 0 или null)
+        if (!sectorSize || sectorSize === 0) {
+            continue;
+        }
+        
         const sectorAngleSize = sectorSize * 2 * Math.PI;
         const startAngle = currentAngle;
         const endAngle = currentAngle + sectorAngleSize;
         const midAngle = (startAngle + endAngle) / 2;
+        
+        const sectorBets = rouletteState.bets[i] || [];
+        
+        // Получаем цвет для сектора
+        const colors = sectorColors[sectorColorIndex % sectorColors.length];
+        sectorColorIndex++;
         
         ctx.beginPath();
         ctx.moveTo(centerX, centerY);
         ctx.arc(centerX, centerY, radius, startAngle, endAngle);
         ctx.closePath();
         
-        // Цвет сектора - если есть ставки, используем активный цвет с градиентом
-        const sectorBets = rouletteState.bets[i] || [];
-        const isActive = sectorBets.length > 0 || i === rouletteState.userSector;
-        
-        if (isActive) {
-            // Градиент для активных секторов
-            const gradient = ctx.createRadialGradient(
-                centerX + Math.cos(midAngle) * radius * 0.3,
-                centerY + Math.sin(midAngle) * radius * 0.3,
-                0,
-                centerX + Math.cos(midAngle) * radius * 0.5,
-                centerY + Math.sin(midAngle) * radius * 0.5,
-                radius
-            );
-            gradient.addColorStop(0, activeColor2);
-            gradient.addColorStop(0.5, activeColor1);
-            gradient.addColorStop(1, activeColor3);
-            ctx.fillStyle = gradient;
-        } else {
-            // Градиент для неактивных секторов
-            const gradient = ctx.createRadialGradient(
-                centerX + Math.cos(midAngle) * radius * 0.3,
-                centerY + Math.sin(midAngle) * radius * 0.3,
-                0,
-                centerX + Math.cos(midAngle) * radius * 0.5,
-                centerY + Math.sin(midAngle) * radius * 0.5,
-                radius
-            );
-            gradient.addColorStop(0, baseColor2);
-            gradient.addColorStop(1, baseColor1);
-            ctx.fillStyle = gradient;
-        }
+        // Градиент для сектора с цветами игрока
+        const gradient = ctx.createRadialGradient(
+            centerX + Math.cos(midAngle) * radius * 0.2,
+            centerY + Math.sin(midAngle) * radius * 0.2,
+            0,
+            centerX + Math.cos(midAngle) * radius * 0.7,
+            centerY + Math.sin(midAngle) * radius * 0.7,
+            radius
+        );
+        gradient.addColorStop(0, colors[0]); // Светлый цвет в центре
+        gradient.addColorStop(1, colors[1]); // Темный цвет на краю
+        ctx.fillStyle = gradient;
         ctx.fill();
         
-        // Обводка для активных секторов (серые тона)
-        if (isActive) {
-            ctx.strokeStyle = '#666666';
-            ctx.lineWidth = 3;
-            ctx.shadowBlur = 0;
-        } else {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-            ctx.lineWidth = 1;
-            ctx.shadowBlur = 0;
-        }
+        // Обводка сектора
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        ctx.closePath();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 2;
         ctx.stroke();
-        ctx.shadowBlur = 0;
         
         // Разделительные линии между секторами
         ctx.beginPath();
@@ -5149,63 +5155,53 @@ function drawRouletteWheel() {
             centerX + Math.cos(startAngle) * radius,
             centerY + Math.sin(startAngle) * radius
         );
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = 2;
         ctx.stroke();
         
-        // Аватары в секторах
-        if (sectorBets.length > 0) {
-            const avatarRadius = radius * 0.72;
+        // Аватары в секторах (рисуем только первый аватар в центре сектора)
+        if (sectorBets.length > 0 && sectorBets[0]) {
+            const avatarRadius = radius * 0.65; // Позиция ближе к краю
             const avatarX = centerX + Math.cos(midAngle) * avatarRadius;
             const avatarY = centerY + Math.sin(midAngle) * avatarRadius;
+            const avatarSize = Math.min(radius * 0.25, 40); // Размер аватара зависит от размера колеса
             
-            // Рисуем аватары (первые 3)
-            sectorBets.slice(0, 3).forEach((bet, idx) => {
-                const offset = (idx - 1) * 20;
-                const x = avatarX + Math.cos(midAngle + Math.PI / 2) * offset;
-                const y = avatarY + Math.sin(midAngle + Math.PI / 2) * offset;
-                
-                // Круг для аватара (серые тона)
-                ctx.beginPath();
-                ctx.arc(x, y, 20, 0, 2 * Math.PI);
-                ctx.fillStyle = '#000';
-                ctx.fill();
-                
-                // Обводка (серый)
-                ctx.strokeStyle = '#666666';
-                ctx.lineWidth = 2;
-                ctx.shadowBlur = 0;
-                ctx.stroke();
-                
-                // Загрузка и отрисовка аватара
-                if (bet.avatar) {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.onload = () => {
-                        ctx.save();
-                        ctx.beginPath();
-                        ctx.arc(x, y, 18, 0, 2 * Math.PI);
-                        ctx.clip();
-                        ctx.drawImage(img, x - 18, y - 18, 36, 36);
-                        ctx.restore();
-                        // Перерисовываем после загрузки
-                        if (!rouletteState.isSpinning) {
-                            drawRouletteWheel();
-                        }
-                    };
-                    img.onerror = () => {
-                        // Если аватар не загрузился, рисуем инициал (серый)
-                        ctx.save();
-                        ctx.fillStyle = '#888888';
-                        ctx.font = 'bold 14px Arial';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillText('?', x, y);
-                        ctx.restore();
-                    };
-                    img.src = bet.avatar;
-                }
-            });
+            const bet = sectorBets[0]; // Берем первого игрока в секторе
+            
+            // Рисуем аватар
+            if (bet.avatar) {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    // Рисуем круглый аватар без обводки и эффектов
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
+                    ctx.clip();
+                    ctx.drawImage(img, avatarX - avatarSize / 2, avatarY - avatarSize / 2, avatarSize, avatarSize);
+                    ctx.restore();
+                    
+                    // Перерисовываем после загрузки только если не идет вращение
+                    if (!rouletteState.isSpinning) {
+                        drawRouletteWheel();
+                    }
+                };
+                img.onerror = () => {
+                    // Если аватар не загрузился, рисуем простой круг
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#555555';
+                    ctx.fill();
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = `bold ${avatarSize / 3}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('?', avatarX, avatarY);
+                    ctx.restore();
+                };
+                img.src = bet.avatar;
+            }
         }
         
         currentAngle = endAngle;
@@ -5214,23 +5210,19 @@ function drawRouletteWheel() {
     // Восстанавливаем контекст
     ctx.restore();
     
-    // Внешняя обводка (серые тона)
+    // Внешняя обводка колеса
     ctx.beginPath();
     ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
     ctx.strokeStyle = '#555555';
     ctx.lineWidth = 4;
     ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
     ctx.stroke();
 }
 
 // Вычисление размеров секторов на основе процентов ставок
 function calculateSectorSizes() {
     const sizes = new Array(rouletteState.sectors).fill(0);
-    
-    if (rouletteState.totalBets === 0) {
-        // Если нет ставок, все секторы равны
-        return sizes.map(() => 1 / rouletteState.sectors);
-    }
     
     // Вычисляем процент каждой ставки по секторам
     const sectorTotals = {};
@@ -5250,29 +5242,17 @@ function calculateSectorSizes() {
         }
     }
     
-    // Если есть ставки, распределяем пропорционально
-    if (totalWithBets > 0) {
-        for (let i = 0; i < rouletteState.sectors; i++) {
-            if (sectorTotals[i]) {
-                sizes[i] = sectorTotals[i] / rouletteState.totalBets;
-            } else {
-                // Незанятые секторы получают минимальный размер
-                sizes[i] = 0.01; // 1% минимум
-            }
+    // Если нет ставок, не отрисовываем секторы (возвращаем все нули)
+    if (totalWithBets === 0) {
+        return sizes; // Все нули - секторы не будут отрисованы
+    }
+    
+    // Распределяем пропорционально - только для секторов со ставками
+    for (let i = 0; i < rouletteState.sectors; i++) {
+        if (sectorTotals[i] && sectorTotals[i] > 0) {
+            sizes[i] = sectorTotals[i] / totalWithBets;
         }
-        
-        // Нормализуем чтобы сумма была 1
-        const sum = sizes.reduce((a, b) => a + b, 0);
-        if (sum > 0) {
-            for (let i = 0; i < sizes.length; i++) {
-                sizes[i] = sizes[i] / sum;
-            }
-        }
-    } else {
-        // Если нет ставок, все равны
-        for (let i = 0; i < sizes.length; i++) {
-            sizes[i] = 1 / rouletteState.sectors;
-        }
+        // Секторы без ставок остаются 0 - они не будут отрисованы
     }
     
     return sizes;
