@@ -5036,7 +5036,7 @@ function resizeRouletteCanvas() {
     const wrapper = rouletteState.wheelCanvas.closest('.roulette-wheel-wrapper');
     if (!wrapper) return;
     
-    const size = Math.min(wrapper.offsetWidth, wrapper.offsetHeight);
+    const size = Math.max(Math.min(wrapper.offsetWidth, wrapper.offsetHeight), 50); // Минимальный размер 50px
     rouletteState.wheelCanvas.width = size;
     rouletteState.wheelCanvas.height = size;
     
@@ -5049,9 +5049,16 @@ function drawRouletteWheel() {
     
     const ctx = rouletteState.wheelCtx;
     const canvas = rouletteState.wheelCanvas;
+    
+    // Проверяем, что canvas имеет валидный размер
+    if (canvas.width < 30 || canvas.height < 30) {
+        console.warn('Canvas слишком маленький для отрисовки рулетки');
+        return;
+    }
+    
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    const radius = Math.min(centerX, centerY) - 15;
+    const radius = Math.max(Math.min(centerX, centerY) - 15, 10); // Минимальный радиус 10px
     
     // Очистка
     ctx.clearRect(0, 0, canvas.width, canvas.height);
