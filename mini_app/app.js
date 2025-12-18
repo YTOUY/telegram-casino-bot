@@ -5308,29 +5308,34 @@ async function loadRouletteData() {
             // Обновляем счетчик - начинаем только при 2+ игроках
             if (data.countdown !== undefined) {
                 rouletteState.countdown = data.countdown;
-                
-                // Начинаем отсчет только если есть минимум 2 игрока
-                if (participants >= rouletteState.minPlayers) {
-                    if (!rouletteState.countdownStarted) {
-                        rouletteState.countdownStarted = true;
-                        startCountdown();
-                    } else if (!rouletteState.countdownInterval) {
-                        // Если отсчет уже начался, но интервал остановлен, перезапускаем
-                        startCountdown();
-                    }
-                    updateCountdown();
+            } else if (rouletteState.countdown === undefined || rouletteState.countdown === null) {
+                // Если счетчик не пришел с сервера, устанавливаем начальное значение
+                rouletteState.countdown = 60;
+            }
+            
+            // Начинаем отсчет только если есть минимум 2 игрока
+            if (participants >= rouletteState.minPlayers) {
+                console.log('✅ Участников достаточно для запуска счетчика:', participants);
+                if (!rouletteState.countdownStarted || !rouletteState.countdownInterval) {
+                    console.log('🚀 Запускаем счетчик');
+                    rouletteState.countdownStarted = true;
+                    startCountdown();
                 } else {
-                    // Если игроков меньше 2, останавливаем счетчик
-                    if (rouletteState.countdownInterval) {
-                        clearInterval(rouletteState.countdownInterval);
-                        rouletteState.countdownInterval = null;
-                    }
-                    rouletteState.countdownStarted = false;
-                    const countdownEl = document.getElementById('roulette-countdown');
-                    if (countdownEl) {
-                        countdownEl.textContent = 'Ждем...';
-                        countdownEl.style.fontSize = '24px';
-                    }
+                    // Обновляем отображаемое значение
+                    updateCountdown();
+                }
+            } else {
+                console.log('⏸️ Недостаточно участников для запуска счетчика:', participants);
+                // Если игроков меньше 2, останавливаем счетчик
+                if (rouletteState.countdownInterval) {
+                    clearInterval(rouletteState.countdownInterval);
+                    rouletteState.countdownInterval = null;
+                }
+                rouletteState.countdownStarted = false;
+                const countdownEl = document.getElementById('roulette-countdown');
+                if (countdownEl) {
+                    countdownEl.textContent = 'Ждем...';
+                    countdownEl.style.fontSize = '24px';
                 }
             }
             
@@ -5376,21 +5381,34 @@ function updateCountdown() {
 
 // Запуск счетчика
 function startCountdown() {
+    // Очищаем предыдущий интервал если есть
     if (rouletteState.countdownInterval) {
         clearInterval(rouletteState.countdownInterval);
+        rouletteState.countdownInterval = null;
     }
+    
+    // Убеждаемся, что счетчик инициализирован
+    if (rouletteState.countdown === undefined || rouletteState.countdown === null) {
+        rouletteState.countdown = 60;
+    }
+    
+    console.log('⏱️ Запуск счетчика, начальное значение:', rouletteState.countdown);
     
     // Обновляем счетчик сразу
     updateCountdown();
     
+    // Запускаем интервал обновления счетчика каждую секунду
     rouletteState.countdownInterval = setInterval(() => {
         rouletteState.countdown--;
+        console.log('⏱️ Счетчик:', rouletteState.countdown);
         updateCountdown();
         
         // Когда счетчик доходит до 0, запускаем вращение колеса
         if (rouletteState.countdown <= 0) {
+            console.log('🎰 Счетчик достиг 0, запускаем вращение колеса');
             clearInterval(rouletteState.countdownInterval);
             rouletteState.countdownInterval = null;
+            rouletteState.countdownStarted = false;
             spinWheel();
         }
     }, 1000);
