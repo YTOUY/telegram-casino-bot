@@ -3,26 +3,34 @@
   command = "echo 'No build needed'"
   functions = "netlify/functions"
 
+# Netlify автоматически обрабатывает функции в /.netlify/functions/
+# Все остальные запросы перенаправляем на index.html для SPA
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+  force = false
 
-# Исключаем статические файлы из редиректов
+# Исключаем статические файлы из редиректа
 [[redirects]]
-  from = "/tonconnect-manifest.json"
-  to = "/tonconnect-manifest.json"
+  from = "/assets/*"
+  to = "/assets/:splat"
   status = 200
-  force = true
+  force = false
 
-# Проксирование API запросов через Netlify Function
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api-proxy/:splat"
+  from = "/nft/*"
+  to = "/nft/:splat"
   status = 200
+  force = false
+
+[[redirects]]
+  from = "/stickers/*"
+  to = "/stickers/:splat"
+  status = 200
+  force = false
 
 [dev]
+  command = "echo 'Development server'"
   port = 8888
-  publish = "."
   functions = "netlify/functions"
-

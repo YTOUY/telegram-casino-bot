@@ -1,0 +1,34 @@
+name: Deploy to Netlify
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'mini_app/**'
+      - '.github/workflows/netlify-deploy.yml'
+  workflow_dispatch: # Позволяет запускать вручную
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Install Netlify CLI
+        run: npm install -g netlify-cli
+      
+      - name: Deploy to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+        run: |
+          cd mini_app
+          netlify deploy --prod --dir . --functions netlify/functions
