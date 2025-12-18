@@ -5063,23 +5063,23 @@ function drawRouletteWheel() {
     // Очистка
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
+    // Рисуем фон колеса (темный круг)
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fill();
+    
     // Сохраняем контекст для поворота
     ctx.save();
     ctx.translate(centerX, centerY);
     ctx.rotate((rouletteState.currentRotation * Math.PI) / 180);
     ctx.translate(-centerX, -centerY);
     
-    // Базовые цвета секторов с градиентами (черно-серые)
-    const baseColor1 = '#1a1a1a';
-    const baseColor2 = '#2a2a2a';
-    const activeColor1 = '#444444';
-    const activeColor2 = '#555555';
-    const activeColor3 = '#3a3a3a';
-    
-    const sectorAngle = (2 * Math.PI) / rouletteState.sectors;
-    
     // Вычисляем размеры секторов на основе процентов ставок
     const sectorSizes = calculateSectorSizes();
+    
+    // Проверяем, есть ли секторы для отрисовки
+    const hasSectors = sectorSizes.some(size => size > 0);
     
     // Цвета для секторов (разные цвета для разных игроков)
     const sectorColors = [
@@ -5098,66 +5098,54 @@ function drawRouletteWheel() {
     ];
     
     // Рисуем только секторы со ставками
-    let currentAngle = -Math.PI / 2;
-    let sectorColorIndex = 0;
-    
-    for (let i = 0; i < rouletteState.sectors; i++) {
-        const sectorSize = sectorSizes[i];
+    if (hasSectors) {
+        let currentAngle = -Math.PI / 2;
+        let sectorColorIndex = 0;
         
-        // Пропускаем секторы без ставок (размер 0 или null)
-        if (!sectorSize || sectorSize === 0) {
-            continue;
-        }
-        
-        const sectorAngleSize = sectorSize * 2 * Math.PI;
-        const startAngle = currentAngle;
-        const endAngle = currentAngle + sectorAngleSize;
-        const midAngle = (startAngle + endAngle) / 2;
-        
-        const sectorBets = rouletteState.bets[i] || [];
-        
-        // Получаем цвет для сектора
-        const colors = sectorColors[sectorColorIndex % sectorColors.length];
-        sectorColorIndex++;
-        
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY);
-        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
-        ctx.closePath();
-        
-        // Градиент для сектора с цветами игрока
-        const gradient = ctx.createRadialGradient(
-            centerX + Math.cos(midAngle) * radius * 0.2,
-            centerY + Math.sin(midAngle) * radius * 0.2,
-            0,
-            centerX + Math.cos(midAngle) * radius * 0.7,
-            centerY + Math.sin(midAngle) * radius * 0.7,
-            radius
-        );
-        gradient.addColorStop(0, colors[0]); // Светлый цвет в центре
-        gradient.addColorStop(1, colors[1]); // Темный цвет на краю
-        ctx.fillStyle = gradient;
-        ctx.fill();
-        
-        // Обводка сектора
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY);
-        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
-        ctx.closePath();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        
-        // Разделительные линии между секторами
-        ctx.beginPath();
-        ctx.moveTo(centerX, centerY);
-        ctx.lineTo(
-            centerX + Math.cos(startAngle) * radius,
-            centerY + Math.sin(startAngle) * radius
-        );
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        for (let i = 0; i < rouletteState.sectors; i++) {
+            const sectorSize = sectorSizes[i];
+            
+            // Пропускаем секторы без ставок (размер 0 или null)
+            if (!sectorSize || sectorSize <= 0) {
+                continue;
+            }
+            
+            const sectorAngleSize = sectorSize * 2 * Math.PI;
+            const startAngle = currentAngle;
+            const endAngle = currentAngle + sectorAngleSize;
+            const midAngle = (startAngle + endAngle) / 2;
+            
+            const sectorBets = rouletteState.bets[i] || [];
+            
+            // Получаем цвет для сектора
+            const colors = sectorColors[sectorColorIndex % sectorColors.length];
+            sectorColorIndex++;
+            
+            // Рисуем сектор
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.closePath();
+            
+            // Используем простой цвет вместо градиента для лучшего качества
+            ctx.fillStyle = colors[1]; // Более насыщенный цвет
+            ctx.fill();
+            
+            // Обводка сектора
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // Разделительные линии между секторами
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.lineTo(
+                centerX + Math.cos(startAngle) * radius,
+                centerY + Math.sin(startAngle) * radius
+            );
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
         
         // Аватары в секторах (рисуем только первый аватар в центре сектора)
         if (sectorBets.length > 0 && sectorBets[0]) {
@@ -5228,13 +5216,23 @@ function calculateSectorSizes() {
     const sectorTotals = {};
     let totalWithBets = 0;
     
+    // Проверяем формат данных ставок
+    // Может быть объект {sector: [bets]} или массив
+    const bets = rouletteState.bets || {};
+    
     for (let sector = 0; sector < rouletteState.sectors; sector++) {
-        const sectorBets = rouletteState.bets[sector] || [];
+        // Поддерживаем разные форматы: bets[sector] или bets[sector.toString()]
+        const sectorBets = bets[sector] || bets[sector.toString()] || [];
         let sectorTotal = 0;
         
-        sectorBets.forEach(bet => {
-            sectorTotal += bet.bet || 0;
-        });
+        if (Array.isArray(sectorBets)) {
+            sectorBets.forEach(bet => {
+                const betAmount = typeof bet === 'number' ? bet : (bet.bet || bet.amount || 0);
+                sectorTotal += betAmount;
+            });
+        } else if (typeof sectorBets === 'number') {
+            sectorTotal = sectorBets;
+        }
         
         if (sectorTotal > 0) {
             sectorTotals[sector] = sectorTotal;
@@ -5244,6 +5242,7 @@ function calculateSectorSizes() {
     
     // Если нет ставок, не отрисовываем секторы (возвращаем все нули)
     if (totalWithBets === 0) {
+        console.log('⚠️ Нет ставок для отрисовки секторов');
         return sizes; // Все нули - секторы не будут отрисованы
     }
     
@@ -5255,6 +5254,7 @@ function calculateSectorSizes() {
         // Секторы без ставок остаются 0 - они не будут отрисованы
     }
     
+    console.log('📐 Размеры секторов:', sizes);
     return sizes;
 }
 
@@ -5291,6 +5291,13 @@ async function loadRouletteData() {
             rouletteState.totalBets = data.total_bets || 0;
             rouletteState.userBet = data.user_bet || 0;
             rouletteState.userSector = data.user_sector || null;
+            
+            // Логируем для отладки
+            console.log('📊 Данные рулетки:', {
+                bets: rouletteState.bets,
+                totalBets: rouletteState.totalBets,
+                userBet: rouletteState.userBet
+            });
             
             // Обновляем игроков
             updateRoulettePlayers(data.players || []);
