@@ -5146,53 +5146,53 @@ function drawRouletteWheel() {
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
             ctx.lineWidth = 2;
             ctx.stroke();
-        
-        // Аватары в секторах (рисуем только первый аватар в центре сектора)
-        if (sectorBets.length > 0 && sectorBets[0]) {
-            const avatarRadius = radius * 0.65; // Позиция ближе к краю
-            const avatarX = centerX + Math.cos(midAngle) * avatarRadius;
-            const avatarY = centerY + Math.sin(midAngle) * avatarRadius;
-            const avatarSize = Math.min(radius * 0.25, 40); // Размер аватара зависит от размера колеса
             
-            const bet = sectorBets[0]; // Берем первого игрока в секторе
-            
-            // Рисуем аватар
-            if (bet.avatar) {
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.onload = () => {
-                    // Рисуем круглый аватар без обводки и эффектов
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
-                    ctx.clip();
-                    ctx.drawImage(img, avatarX - avatarSize / 2, avatarY - avatarSize / 2, avatarSize, avatarSize);
-                    ctx.restore();
-                    
-                    // Перерисовываем после загрузки только если не идет вращение
-                    if (!rouletteState.isSpinning) {
-                        drawRouletteWheel();
-                    }
-                };
-                img.onerror = () => {
-                    // Если аватар не загрузился, рисуем простой круг
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
-                    ctx.fillStyle = '#555555';
-                    ctx.fill();
-                    ctx.fillStyle = '#ffffff';
-                    ctx.font = `bold ${avatarSize / 3}px Arial`;
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText('?', avatarX, avatarY);
-                    ctx.restore();
-                };
-                img.src = bet.avatar;
+            // Аватары в секторах (рисуем только первый аватар в центре сектора)
+            if (sectorBets.length > 0 && sectorBets[0]) {
+                const avatarRadius = radius * 0.65; // Позиция ближе к краю
+                const avatarX = centerX + Math.cos(midAngle) * avatarRadius;
+                const avatarY = centerY + Math.sin(midAngle) * avatarRadius;
+                const avatarSize = Math.min(radius * 0.25, 40); // Размер аватара зависит от размера колеса
+                
+                const bet = sectorBets[0]; // Берем первого игрока в секторе
+                
+                // Рисуем аватар
+                if (bet.avatar) {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = () => {
+                        // Рисуем круглый аватар без обводки и эффектов
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
+                        ctx.clip();
+                        ctx.drawImage(img, avatarX - avatarSize / 2, avatarY - avatarSize / 2, avatarSize, avatarSize);
+                        ctx.restore();
+                        
+                        // Перерисовываем после загрузки только если не идет вращение
+                        if (!rouletteState.isSpinning) {
+                            drawRouletteWheel();
+                        }
+                    };
+                    img.onerror = () => {
+                        // Если аватар не загрузился, рисуем простой круг
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
+                        ctx.fillStyle = '#555555';
+                        ctx.fill();
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = `bold ${avatarSize / 3}px Arial`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText('?', avatarX, avatarY);
+                        ctx.restore();
+                    };
+                    img.src = bet.avatar;
+                }
             }
-        }
-        
-        currentAngle = endAngle;
+            
+            currentAngle = endAngle;
     }
     
     // Восстанавливаем контекст
