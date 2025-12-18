@@ -5074,12 +5074,6 @@ function drawRouletteWheel() {
         return;
     }
     
-    // Получаем реальные размеры canvas (уже масштабированные для Retina)
-    const dpr = window.devicePixelRatio || 1;
-    const displayWidth = parseInt(canvas.style.width) || (canvas.width / dpr);
-    const displayHeight = parseInt(canvas.style.height) || (canvas.height / dpr);
-    
-    // Используем display размеры для отрисовки (контекст уже масштабирован)
     // Получаем display размеры (контекст уже масштабирован для Retina в resizeRouletteCanvas)
     const dpr = window.devicePixelRatio || 1;
     const displayWidth = parseInt(canvas.style.width) || (canvas.width / dpr);
