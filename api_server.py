@@ -31,6 +31,7 @@ bot = Bot(token=BOT_TOKEN)
 MINI_APP_GAMES = {}  # {game_id: {"user_id": int, "game_type": str, "bet": float, "status": str}}
 
 
+
 def verify_telegram_init_data(init_data: str) -> Optional[Dict]:
     """Проверка подписи initData от Telegram"""
     try:
@@ -1082,6 +1083,448 @@ async def handle_wallet_deposit_status(request: Request) -> Response:
         return web.json_response({"error": "Internal server error"}, status=500)
 
 
+# ========== РУЛЕТКА API ==========
+
+# Глобальное состояние рулетки (в реальном приложении лучше использовать Redis или БД)
+ROULETTE_STATE = {
+    'current_round': 1,
+    'game_id': 1,  # Номер текущей игры
+    'countdown': 60,
+    'bets': {},  # {sector: [{user_id, bet, avatar, username}]}
+    'round_start_time': None
+}
+
+async def handle_roulette_data(request: Request) -> Response:
+    """GET /api/roulette/data - Получить данные рулетки"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    user_id = user_data.get('id')
+    if not user_id:
+        return web.json_response({"error": "Invalid user data"}, status=400)
+    
+    try:
+        # Получаем все ставки текущего раунда
+        bets = ROULETTE_STATE.get('bets', {})
+        
+        # Подсчитываем статистику
+        total_bets = 0.0
+        participants = set()
+        user_bet = 0.0
+        
+        # Нормализуем user_id для сравнения
+        try:
+            user_id_int = int(user_id)
+        except (ValueError, TypeError):
+            user_id_int = user_id
+        
+        for sector, sector_bets in bets.items():
+            for bet_data in sector_bets:
+                bet_amount = bet_data.get('bet', 0.0)
+                total_bets += bet_amount
+                
+                # Нормализуем user_id участника
+                participant_id = bet_data.get('user_id')
+                if participant_id is not None:
+                    try:
+                        participant_id = int(participant_id)
+                    except (ValueError, TypeError):
+                        pass
+                    participants.add(participant_id)
+                    
+                    # Сравниваем нормализованные ID
+                    if participant_id == user_id_int:
+                        user_bet += bet_amount
+        
+        # Получаем список игроков с аватарами, ставками и шансами на победу
+        players = []
+        # Вычисляем общую сумму ставок по секторам для расчета шансов
+        sector_totals = {}
+        for sector, sector_bets in bets.items():
+            sector_total = sum(bet_data.get('bet', 0.0) for bet_data in sector_bets)
+            sector_totals[int(sector)] = sector_total
+        
+        # Вычисляем общую сумму всех ставок
+        total_all_bets = sum(sector_totals.values())
+        
+        # Собираем данные по каждому игроку
+        player_data = {}  # {user_id: {total_bet, sectors, name, avatar}}
+        for sector, sector_bets in bets.items():
+            for bet_data in sector_bets:
+                # Нормализуем user_id (может быть строкой или числом)
+                user_id_participant = bet_data.get('user_id')
+                if user_id_participant is None:
+                    continue
+                # Преобразуем в int для консистентности
+                try:
+                    user_id_participant = int(user_id_participant)
+                except (ValueError, TypeError):
+                    continue
+                
+                bet_amount = bet_data.get('bet', 0.0)
+                
+                if user_id_participant not in player_data:
+                    user = await db.get_user(user_id_participant)
+                    player_data[user_id_participant] = {
+                        'user_id': user_id_participant,
+                        'total_bet': 0.0,
+                        'sectors': [],
+                        'name': user.get('username', f'User {user_id_participant}') if user else f'User {user_id_participant}',
+                        'avatar': (user.get('photo_url') if user else None) or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id_participant}.jpg'
+                    }
+                
+                player_data[user_id_participant]['total_bet'] += bet_amount
+                sector_num = int(sector) if isinstance(sector, (str, int)) else sector
+                if sector_num not in player_data[user_id_participant]['sectors']:
+                    player_data[user_id_participant]['sectors'].append(sector_num)
+        
+        # Вычисляем шансы на победу для каждого игрока
+        for user_id_participant, data in player_data.items():
+            # Шанс = сумма ставок игрока на его секторах / общая сумма всех ставок
+            player_sector_total = sum(sector_totals.get(s, 0) for s in data['sectors'])
+            win_chance = (player_sector_total / total_all_bets * 100) if total_all_bets > 0 else 0
+            
+            players.append({
+                'user_id': data['user_id'],
+                'name': data['name'],
+                'avatar': data['avatar'],
+                'total_bet': data['total_bet'],
+                'win_chance': round(win_chance, 1),
+                'sectors': data['sectors']
+            })
+        
+        # Убеждаемся, что текущий пользователь всегда в списке (даже если его ставка еще не обработана)
+        current_user_in_list = any(p.get('user_id') == user_id_int for p in players)
+        if not current_user_in_list and user_bet > 0:
+            # Если пользователь сделал ставку, но его нет в списке, добавляем его
+            user = await db.get_user(user_id)
+            user_avatar = user_data.get('photo_url') or (user.get('photo_url') if user else None) or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id}.jpg'
+            user_name = user_data.get('first_name', '') + (' ' + user_data.get('last_name', '') if user_data.get('last_name') else '')
+            if not user_name:
+                user_name = (user.get('username') if user else None) or f'User {user_id}'
+            
+            # Вычисляем шанс для текущего пользователя
+            user_sectors = []
+            user_sector_total = 0.0
+            for sector, sector_bets in bets.items():
+                for bet_data in sector_bets:
+                    bet_user_id = bet_data.get('user_id')
+                    try:
+                        bet_user_id = int(bet_user_id) if bet_user_id is not None else None
+                    except (ValueError, TypeError):
+                        pass
+                    if bet_user_id == user_id_int:
+                        sector_num = int(sector) if isinstance(sector, (str, int)) else sector
+                        if sector_num not in user_sectors:
+                            user_sectors.append(sector_num)
+                        user_sector_total += sector_totals.get(sector_num, 0)
+            
+            user_win_chance = (user_sector_total / total_all_bets * 100) if total_all_bets > 0 else 0
+            
+            players.append({
+                'user_id': user_id_int,
+                'name': user_name,
+                'avatar': user_avatar,
+                'total_bet': user_bet,
+                'win_chance': round(user_win_chance, 1),
+                'sectors': user_sectors
+            })
+            logger.info(f"✅ Добавлен текущий пользователь {user_id_int} в список игроков (ставка: ${user_bet:.2f})")
+        
+        # Сортируем игроков по сумме ставки (от большего к меньшему)
+        players.sort(key=lambda x: x['total_bet'], reverse=True)
+        
+        logger.info(f"📊 Список игроков: {len(players)} игроков, текущий user_id={user_id_int}, в списке={any(p.get('user_id') == user_id_int for p in players)}")
+        
+        # Вычисляем счетчик - начинается только при 2+ игроках
+        import time
+        participants_count = len(participants)
+        min_players = 2
+        
+        if participants_count >= min_players:
+            # Если есть минимум 2 игрока, начинаем/продолжаем отсчет
+            if not ROULETTE_STATE.get('round_start_time'):
+                ROULETTE_STATE['round_start_time'] = time.time()
+                countdown = 60
+            else:
+                elapsed = int(time.time() - ROULETTE_STATE['round_start_time'])
+                countdown = max(0, 60 - elapsed)
+                # Если счетчик уже дошел до 0, но игра еще не завершена, оставляем 0
+                if countdown == 0 and not ROULETTE_STATE.get('round_finished', False):
+                    countdown = 0
+        else:
+            # Если игроков меньше 2, не начинаем отсчет и сбрасываем таймер
+            countdown = 60
+            ROULETTE_STATE['round_start_time'] = None
+            ROULETTE_STATE['round_finished'] = False
+        
+        # Находим сектор пользователя
+        user_sector = None
+        user_avatar = None
+        for sector, sector_bets in bets.items():
+            for bet_data in sector_bets:
+                if bet_data.get('user_id') == user_id:
+                    user_sector = sector
+                    user_avatar = bet_data.get('avatar')
+                    break
+            if user_sector is not None:
+                break
+        
+        # Если не нашли, пробуем получить из user_data
+        if not user_avatar:
+            user_avatar = user_data.get('photo_url') or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id}.jpg'
+        
+        return web.json_response({
+            'participants': len(participants),
+            'total_bets': total_bets,
+            'user_bet': user_bet,
+            'bets': bets,
+            'players': players,
+            'countdown': countdown,
+            'game_id': ROULETTE_STATE.get('game_id', 1),
+            'user_sector': user_sector,
+            'user_avatar': user_avatar
+        })
+    except Exception as e:
+        logger.error(f"Ошибка получения данных рулетки: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+async def handle_roulette_bet(request: Request) -> Response:
+    """POST /api/roulette/bet - Разместить ставку"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    user_id = user_data.get('id')
+    if not user_id:
+        return web.json_response({"error": "Invalid user data"}, status=400)
+    
+    try:
+        data = await request.json()
+        bet = float(data.get('bet', 0.0))
+        sector = int(data.get('sector', 0))  # Если не указан, выбираем случайный
+        
+        if bet < 0.1:
+            return web.json_response({"error": "Минимальная ставка: $0.10"}, status=400)
+        
+        # Проверяем баланс
+        user = await db.get_user(user_id)
+        if not user:
+            return web.json_response({"error": "User not found"}, status=404)
+        
+        balance = user.get('balance', 0.0)
+        if balance < bet:
+            return web.json_response({"error": "Недостаточно средств"}, status=400)
+        
+        # Списываем баланс
+        await db.update_balance(user_id, -bet)
+        await db.decrease_rollover(user_id, bet)
+        
+        # Если сектор не указан, выбираем случайный
+        if sector == 0:
+            import random
+            sector = random.randint(1, 12)
+        
+        # Добавляем ставку
+        if 'bets' not in ROULETTE_STATE:
+            ROULETTE_STATE['bets'] = {}
+        
+        if sector not in ROULETTE_STATE['bets']:
+            ROULETTE_STATE['bets'][sector] = []
+        
+        # Получаем аватар пользователя
+        avatar = user_data.get('photo_url') or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id}.jpg'
+        username = user_data.get('first_name', '') + (' ' + user_data.get('last_name', '') if user_data.get('last_name') else '')
+        if not username:
+            username = user.get('username', f'User {user_id}')
+        
+        # Убеждаемся, что user_id - это число
+        user_id_int = int(user_id) if user_id is not None else None
+        
+        ROULETTE_STATE['bets'][sector].append({
+            'user_id': user_id_int,  # Сохраняем как int для консистентности
+            'bet': bet,
+            'avatar': avatar,
+            'username': username
+        })
+        
+        logger.info(f"📝 Ставка добавлена в ROULETTE_STATE: user_id={user_id_int}, bet=${bet:.2f}, sector={sector}, bets={ROULETTE_STATE.get('bets', {})}")
+        
+        # Сохраняем игру в БД
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute(
+                "INSERT INTO games (user_id, game_type, bet, result, win) VALUES (?, ?, ?, ?, ?)",
+                (user_id_int, 'roulette', bet, sector, 0.0)  # win будет обновлен после завершения раунда
+            )
+            await conn.commit()
+        
+        logger.info(f"✅ Ставка размещена: user_id={user_id_int}, bet=${bet:.2f}, sector={sector}")
+        
+        # Возвращаем также аватар пользователя
+        user_avatar = user_data.get('photo_url') or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id}.jpg'
+        
+        return web.json_response({
+            'success': True,
+            'sector': sector,
+            'bet': bet,
+            'user_avatar': user_avatar
+        })
+    except Exception as e:
+        logger.error(f"Ошибка размещения ставки: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+async def handle_roulette_top_games(request: Request) -> Response:
+    """GET /api/roulette/top/games - Топ игр в рулетке"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    try:
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute("""
+                SELECT 
+                    g.id as game_id,
+                    g.user_id,
+                    g.bet,
+                    g.win,
+                    g.created_at,
+                    u.username,
+                    u.photo_url as avatar
+                FROM games g
+                LEFT JOIN users u ON g.user_id = u.user_id
+                WHERE g.game_type = 'roulette'
+                ORDER BY g.bet DESC, g.created_at DESC
+                LIMIT 10
+            """)
+            rows = await cursor.fetchall()
+            
+            items = []
+            for row in rows:
+                items.append({
+                    'game_id': row['game_id'],
+                    'name': row['username'] or f"User {row['user_id']}",
+                    'avatar': row['avatar'] or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{row["user_id"]}.jpg',
+                    'bet': row['bet'],
+                    'win': row['win']
+                })
+            
+            return web.json_response({'items': items})
+    except Exception as e:
+        logger.error(f"Ошибка получения топа игр: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+async def handle_roulette_finish(request: Request) -> Response:
+    """POST /api/roulette/finish - Завершить раунд рулетки"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    try:
+        data = await request.json()
+        winning_sector = int(data.get('winning_sector', 0))
+        
+        # Получаем все ставки на выигрышный сектор
+        winning_bets = ROULETTE_STATE.get('bets', {}).get(winning_sector, [])
+        
+        if not winning_bets:
+            # Если нет ставок на выигрышный сектор, возвращаем банк в пул
+            return web.json_response({
+                'winner': None,
+                'win_amount': 0,
+                'message': 'Нет победителей'
+            })
+        
+        # Вычисляем общий банк
+        total_pot = 0.0
+        for sector, bets in ROULETTE_STATE.get('bets', {}).items():
+            for bet_data in bets:
+                total_pot += bet_data.get('bet', 0.0)
+        
+        # Победитель - первый игрок на выигрышном секторе (или случайный, если несколько)
+        import random
+        winner = random.choice(winning_bets) if len(winning_bets) > 1 else winning_bets[0]
+        win_amount = total_pot
+        
+        # Начисляем выигрыш
+        await db.update_balance(winner['user_id'], win_amount)
+        
+        # Сохраняем результат игры
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute(
+                "UPDATE games SET win = ?, result = ? WHERE user_id = ? AND game_type = 'roulette' AND win = 0 ORDER BY created_at DESC LIMIT 1",
+                (win_amount, winning_sector, winner['user_id'])
+            )
+            await conn.commit()
+        
+        # Очищаем ставки для нового раунда и увеличиваем номер игры
+        ROULETTE_STATE['bets'] = {}
+        ROULETTE_STATE['round_start_time'] = None
+        ROULETTE_STATE['round_finished'] = False
+        ROULETTE_STATE['game_id'] = ROULETTE_STATE.get('game_id', 1) + 1
+        
+        logger.info(f"Раунд рулетки завершен: победитель user_id={winner['user_id']}, выигрыш=${win_amount:.2f}")
+        
+        return web.json_response({
+            'winner': {
+                'user_id': winner['user_id'],
+                'username': winner.get('username', f"User {winner['user_id']}")
+            },
+            'win_amount': win_amount,
+            'winning_sector': winning_sector
+        })
+    except Exception as e:
+        logger.error(f"Ошибка завершения раунда рулетки: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
+async def handle_roulette_top_users(request: Request) -> Response:
+    """GET /api/roulette/top/users - Топ пользователей в рулетке"""
+    user_data = await get_user_from_request(request)
+    if not user_data:
+        return web.json_response({"error": "Unauthorized"}, status=401)
+    
+    try:
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cursor = await conn.execute("""
+                SELECT 
+                    u.user_id,
+                    u.username,
+                    u.photo_url as avatar,
+                    COALESCE(SUM(g.bet), 0) as total_bets,
+                    COALESCE(SUM(g.win), 0) as total_wins,
+                    COUNT(g.id) as games_count
+                FROM users u
+                LEFT JOIN games g ON u.user_id = g.user_id AND g.game_type = 'roulette'
+                GROUP BY u.user_id
+                HAVING total_bets > 0
+                ORDER BY total_bets DESC
+                LIMIT 10
+            """)
+            rows = await cursor.fetchall()
+            
+            items = []
+            for row in rows:
+                items.append({
+                    'user_id': row['user_id'],
+                    'name': row['username'] or f"User {row['user_id']}",
+                    'avatar': row['avatar'] or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{row["user_id"]}.jpg',
+                    'total': row['total_bets'],
+                    'wins': row['total_wins'],
+                    'games': row['games_count']
+                })
+            
+            return web.json_response({'items': items})
+    except Exception as e:
+        logger.error(f"Ошибка получения топа пользователей: {e}", exc_info=True)
+        return web.json_response({"error": "Internal server error"}, status=500)
+
+
 def create_app() -> web.Application:
     """Создать приложение aiohttp"""
     app = web.Application()
@@ -1123,6 +1566,13 @@ def create_app() -> web.Application:
     app.router.add_get('/api/wallet/deposit-methods', handle_wallet_deposit_methods)
     app.router.add_post('/api/wallet/deposit-address', handle_wallet_deposit_address)
     app.router.add_get('/api/wallet/deposit-status/{deposit_id}', handle_wallet_deposit_status)
+    
+    # Roulette endpoints
+    app.router.add_get('/api/roulette/data', handle_roulette_data)
+    app.router.add_post('/api/roulette/bet', handle_roulette_bet)
+    app.router.add_post('/api/roulette/finish', handle_roulette_finish)
+    app.router.add_get('/api/roulette/top/games', handle_roulette_top_games)
+    app.router.add_get('/api/roulette/top/users', handle_roulette_top_users)
     
     return app
 
