@@ -5518,6 +5518,9 @@ async function spinWheel() {
     const startTime = Date.now();
     const startRotation = rouletteState.currentRotation;
     
+    // Продолжительность вращения
+    const spinDuration = 3000 + Math.random() * 1000; // 3-4 секунды
+    
     // Плавная easing функция без резких движений
     function smoothEase(t) {
         // Плавное замедление без пружинных эффектов
