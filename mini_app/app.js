@@ -447,22 +447,9 @@ async function loadTgsSticker(element, tgsUrl) {
             hasPako: !!window.pako
         });
         
-        // НЕ показываем fallback изображение для TGS - это может быть неправильный формат
-        // Лучше показать ошибку, чтобы пользователь знал, что что-то не так
-        const errorDiv = document.createElement('div');
-        errorDiv.style.width = '100%';
-        errorDiv.style.height = '100%';
-        errorDiv.style.background = 'rgba(255, 0, 0, 0.1)';
-        errorDiv.style.borderRadius = '20px';
-        errorDiv.style.display = 'flex';
-        errorDiv.style.alignItems = 'center';
-        errorDiv.style.justifyContent = 'center';
-        errorDiv.style.color = 'var(--text-secondary)';
-        errorDiv.style.fontSize = '12px';
-        errorDiv.textContent = '⚠️ TGS ошибка';
+        // Не показываем ошибку - просто оставляем пустым (стикер будет позже)
         element.innerHTML = '';
-        element.appendChild(errorDiv);
-        element.style.opacity = '1';
+        element.style.opacity = '0.5';
     }
 }
 
@@ -521,26 +508,35 @@ async function loadUserData() {
         const contentType = response.headers.get('content-type') || '';
         const isJson = contentType.includes('application/json');
         
-        if (!isJson) {
-            // Если ответ не JSON, читаем как текст для диагностики
-            const text = await response.text();
-            console.error('❌ Ответ не JSON! Content-Type:', contentType);
-            console.error('❌ Первые 500 символов ответа:', text.substring(0, 500));
-            console.error('❌ URL запроса:', requestUrl);
+        // Читаем ответ как текст сначала (можно прочитать только один раз!)
+        const responseText = await response.text();
+        
+        // Пробуем распарсить как JSON независимо от Content-Type
+        let data = null;
+        try {
+            data = JSON.parse(responseText);
+        } catch (parseError) {
+            // Не удалось распарсить как JSON
+            console.warn('⚠️ Ответ не JSON! Content-Type:', contentType);
+            console.warn('⚠️ Первые 200 символов ответа:', responseText.substring(0, 200));
             
             // Если это HTML (обычно означает что Netlify Function не работает)
-            if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<!doctype') || text.includes('<html')) {
-                const errorMsg = 'Netlify Function не работает. Получен HTML вместо JSON. ' +
-                    'Проверьте: 1) Развертывание функции на Netlify, 2) Логи функций: https://app.netlify.com/projects/arbuzcas/logs/functions';
+            if (responseText.trim().startsWith('<!DOCTYPE') || responseText.trim().startsWith('<!doctype') || responseText.includes('<html')) {
+                const errorMsg = 'Netlify Function не работает. Получен HTML вместо JSON.';
                 console.error('❌', errorMsg);
-                throw new Error(errorMsg);
+                showToast('Ошибка подключения к серверу');
+                return;
             }
             
-            throw new Error(`Ожидался JSON, получен ${contentType || 'неизвестный тип'}. Ответ: ${text.substring(0, 100)}`);
+            // Показываем общую ошибку без технических деталей
+            console.error('❌ Не удалось обработать ответ:', responseText.substring(0, 200));
+            showToast('Ошибка подключения к серверу');
+            return;
         }
         
-        if (response.ok) {
-            const data = await response.json();
+        // Обрабатываем ответ
+        if (response.ok && data.balance !== undefined) {
+            // Успешный ответ с данными пользователя
             const newBalance = parseFloat(data.balance) || 0;
             const newBaseBet = parseFloat(data.base_bet) || 1.0;
             
@@ -562,24 +558,13 @@ async function loadUserData() {
             }
             updateUI();
         } else {
-            let errorData = {};
-            try {
-                const text = await response.text();
-                errorData = text ? JSON.parse(text) : {};
-            } catch (e) {
-                console.error('Ошибка парсинга ответа:', e);
-            }
-            
-            console.error('❌ Ошибка загрузки данных пользователя:', {
-                status: response.status,
-                statusText: response.statusText,
-                error: errorData,
-                url: requestUrl
-            });
+            // Ошибка в ответе
+            console.error('❌ Ошибка в ответе:', data);
             
             // Показываем ошибку пользователю только если это не 401 (неавторизован)
             if (response.status !== 401) {
-                showToast(`Ошибка загрузки баланса (${response.status})`);
+                const errorMsg = data.error || data.message || `Ошибка загрузки (${response.status})`;
+                showToast(errorMsg);
             } else {
                 console.warn('⚠️ 401 Unauthorized - возможно проблема с initData или авторизацией');
             }
@@ -593,13 +578,18 @@ async function loadUserData() {
             name: error.name
         });
         
-        // Более детальное сообщение об ошибке
+        // Показываем пользователю понятное сообщение об ошибке
         let errorMessage = 'Ошибка подключения к серверу';
+        
         if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-            errorMessage = 'Не удалось подключиться к серверу. Проверьте настройки API.';
+            errorMessage = 'Не удалось подключиться к серверу. Проверьте интернет-соединение.';
         } else if (error.name === 'AbortError') {
             errorMessage = 'Таймаут подключения к серверу';
-        } else {
+        } else if (error.message && (error.message.includes('JSON') || error.message.includes('Content-Type'))) {
+            errorMessage = 'Ошибка подключения к серверу. Попробуйте позже.';
+        } else if (error.message && (error.message.includes('fetch failed') || error.message.includes('Failed to fetch'))) {
+            errorMessage = 'Не удалось подключиться к серверу. Проверьте интернет-соединение.';
+        } else if (error.message) {
             errorMessage = `Ошибка: ${error.message}`;
         }
         
@@ -729,6 +719,11 @@ function switchPage(pageName) {
         stopTopAutoRefresh();
     }
     
+    // Останавливаем автообновление рулетки, если уходим со страницы рулетки
+    if (appState.currentPage === 'roulette' && pageName !== 'roulette') {
+        closeRoulettePage();
+    }
+    
     // Показываем нужную страницу
     const targetPage = document.getElementById(`page-${pageName}`);
     if (targetPage) {
@@ -763,6 +758,10 @@ async function loadPageData(pageName) {
         case 'profile':
             await loadProfileData();
             break;
+        case 'wallet':
+            // Кошелек теперь доступен через профиль, но оставляем для обратной совместимости
+            await loadWalletData();
+            break;
         case 'top':
             // Загружаем топ с периодом "day" по умолчанию
             await loadTopData('players', 'day');
@@ -771,6 +770,9 @@ async function loadPageData(pageName) {
             break;
         case 'settings':
             await loadSettings();
+            break;
+        case 'roulette':
+            await openRoulettePage();
             break;
     }
 }
@@ -2513,8 +2515,9 @@ async function loadStickerForElement(element, stickerName) {
                             return;
                         } catch (error) {
                             console.error('❌ Ошибка при загрузке TGS стикера:', error);
-                            // Не показываем fallback изображение для TGS - лучше показать ошибку
-                            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(255,0,0,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️ TGS ошибка</div>`;
+                            // Не показываем ошибку - стикер будет позже
+                            element.innerHTML = '';
+                            element.style.opacity = '0.3';
                         }
                     } else {
                         console.error('❌ Библиотеки lottie или pako не загружены');
@@ -2606,8 +2609,9 @@ async function loadStickerForElement(element, stickerName) {
                             return;
                         } catch (error) {
                             console.error('❌ Ошибка при загрузке TGS стикера через API:', error);
-                            // Не показываем fallback изображение - лучше показать ошибку
-                            element.innerHTML = `<div style="width: ${stickerSize}; height: ${stickerSize}; background: rgba(255,0,0,0.1); border-radius: 20px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 12px;">⚠️ TGS ошибка</div>`;
+                            // Не показываем ошибку - стикер будет позже
+                            element.innerHTML = '';
+                            element.style.opacity = '0.3';
                             return;
                         }
                     } else {
@@ -2698,6 +2702,17 @@ function initPages() {
     
     // Проверяем статус подключения кошелька при загрузке страницы кошелька
     checkWalletConnectionStatus();
+    
+    // Кнопка кошелек в профиле
+    const walletProfileBtn = document.getElementById('btn-wallet-profile');
+    if (walletProfileBtn) {
+        walletProfileBtn.addEventListener('click', () => {
+            switchPage('wallet');
+            // Обновляем активную кнопку в навигации
+            const navButtons = document.querySelectorAll('.nav-btn');
+            navButtons.forEach(b => b.classList.remove('active'));
+        });
+    }
     
     // Настройки
     document.getElementById('btn-base-bet').addEventListener('click', () => {
@@ -2837,6 +2852,9 @@ function initPages() {
             hideModal('modal-base-bet');
         }
     });
+    
+    // Инициализация рулетки
+    initRoulette();
 }
 
 // Показать методы пополнения
@@ -4872,3 +4890,878 @@ document.getElementById('copy-referral-link')?.addEventListener('click', () => {
     showToast('Ссылка скопирована!');
 });
 
+// ========== РУЛЕТКА ==========
+
+// Состояние рулетки
+const rouletteState = {
+    sectors: 12, // Количество секторов
+    currentSector: 0,
+    bets: {}, // {sector: [{user_id, bet, avatar, percentage}]}
+    totalBets: 0, // Общая сумма всех ставок
+    userBet: 0, // Ставка текущего пользователя
+    userSector: null, // Сектор текущего пользователя
+    countdown: 60,
+    countdownInterval: null,
+    refreshInterval: null,
+    wheelCanvas: null,
+    wheelCtx: null,
+    isSpinning: false,
+    topTab: 'games', // 'games' или 'users'
+    countdownStarted: false, // Начался ли отсчет
+    minPlayers: 2, // Минимум игроков для начала отсчета
+    currentRotation: 0, // Текущий угол поворота колеса
+    spinningAnimation: null // ID анимации вращения
+};
+
+// Инициализация рулетки
+function initRoulette() {
+    const roulettePage = document.getElementById('page-roulette');
+    if (!roulettePage) return;
+    
+    // Инициализация Canvas для колеса
+    const canvas = document.getElementById('roulette-wheel');
+    if (canvas) {
+        rouletteState.wheelCanvas = canvas;
+        rouletteState.wheelCtx = canvas.getContext('2d');
+        resizeRouletteCanvas();
+        // Удаляем старый обработчик resize если есть, чтобы не накапливались
+        window.removeEventListener('resize', resizeRouletteCanvas);
+        window.addEventListener('resize', resizeRouletteCanvas);
+    }
+    
+    // Кнопка "Поставить" - клонируем для удаления старых обработчиков
+    let betBtn = document.getElementById('btn-place-bet');
+    if (betBtn && betBtn.parentNode) {
+        const newBetBtn = betBtn.cloneNode(true);
+        betBtn.parentNode.replaceChild(newBetBtn, betBtn);
+        betBtn = newBetBtn;
+        betBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            placeRouletteBet();
+        });
+    }
+    
+    // Кнопка добавления к ставке - клонируем для удаления старых обработчиков
+    let addBetBtn = document.getElementById('btn-add-bet');
+    if (addBetBtn && addBetBtn.parentNode) {
+        const newAddBetBtn = addBetBtn.cloneNode(true);
+        addBetBtn.parentNode.replaceChild(newAddBetBtn, addBetBtn);
+        addBetBtn = newAddBetBtn;
+        addBetBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            addToBet();
+        });
+    }
+    
+    // Поле ввода ставки - клонируем для удаления старых обработчиков
+    let betInput = document.getElementById('roulette-bet-input');
+    if (betInput && betInput.parentNode) {
+        const newBetInput = betInput.cloneNode(true);
+        // Сохраняем значение (нормализуем: используем точку для number input)
+        const currentValue = betInput.value || '1.00';
+        newBetInput.value = currentValue.replace(',', '.');
+        betInput.parentNode.replaceChild(newBetInput, betInput);
+        betInput = newBetInput;
+        
+        // Устанавливаем начальное значение если пустое
+        if (!betInput.value || betInput.value === '') {
+            betInput.value = (appState.baseBet || 1.0).toFixed(2);
+        }
+        
+        betInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                placeRouletteBet();
+            }
+        });
+        
+        // Обработчик для ввода - нормализуем значение (заменяем запятую на точку)
+        betInput.addEventListener('input', (e) => {
+            let value = e.target.value;
+            // Заменяем запятую на точку для корректной работы с type="number"
+            if (value.includes(',')) {
+                value = value.replace(',', '.');
+                e.target.value = value;
+            }
+        });
+    }
+    
+    // Быстрые кнопки ставок - клонируем для удаления старых обработчиков
+    document.querySelectorAll('.bet-quick-btn-roulette').forEach(btn => {
+        if (btn.parentNode) {
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
+            
+            newBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Убираем активность с других кнопок
+                document.querySelectorAll('.bet-quick-btn-roulette').forEach(b => b.classList.remove('active'));
+                newBtn.classList.add('active');
+                
+                const value = newBtn.dataset.value;
+                const input = document.getElementById('roulette-bet-input');
+                if (input) {
+                    if (value === 'base') {
+                        input.value = appState.baseBet.toFixed(2);
+                    } else {
+                        input.value = parseFloat(value).toFixed(2);
+                    }
+                    // Фокусируем поле ввода
+                    input.focus();
+                }
+            });
+        }
+    });
+    
+    // Кнопка чат (если есть)
+    const chatBtn = document.getElementById('btn-roulette-chat');
+    if (chatBtn && chatBtn.parentNode) {
+        const newChatBtn = chatBtn.cloneNode(true);
+        chatBtn.parentNode.replaceChild(newChatBtn, chatBtn);
+        newChatBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showToast('Чат скоро будет доступен');
+        });
+    }
+}
+
+// Изменение размера Canvas
+function resizeRouletteCanvas() {
+    if (!rouletteState.wheelCanvas) return;
+    
+    const wrapper = rouletteState.wheelCanvas.closest('.roulette-wheel-wrapper');
+    if (!wrapper) return;
+    
+    const size = Math.min(wrapper.offsetWidth, wrapper.offsetHeight);
+    rouletteState.wheelCanvas.width = size;
+    rouletteState.wheelCanvas.height = size;
+    
+    drawRouletteWheel();
+}
+
+// Отрисовка колеса рулетки
+function drawRouletteWheel() {
+    if (!rouletteState.wheelCtx || !rouletteState.wheelCanvas) return;
+    
+    const ctx = rouletteState.wheelCtx;
+    const canvas = rouletteState.wheelCanvas;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = Math.min(centerX, centerY) - 15;
+    
+    // Очистка
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Сохраняем контекст для поворота
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.rotate((rouletteState.currentRotation * Math.PI) / 180);
+    ctx.translate(-centerX, -centerY);
+    
+    // Базовые цвета секторов с градиентами (черно-серые)
+    const baseColor1 = '#1a1a1a';
+    const baseColor2 = '#2a2a2a';
+    const activeColor1 = '#444444';
+    const activeColor2 = '#555555';
+    const activeColor3 = '#3a3a3a';
+    
+    const sectorAngle = (2 * Math.PI) / rouletteState.sectors;
+    
+    // Вычисляем размеры секторов на основе процентов ставок
+    const sectorSizes = calculateSectorSizes();
+    
+    // Рисуем секторы с учетом процентов
+    let currentAngle = -Math.PI / 2;
+    for (let i = 0; i < rouletteState.sectors; i++) {
+        const sectorSize = sectorSizes[i] || (1 / rouletteState.sectors);
+        const sectorAngleSize = sectorSize * 2 * Math.PI;
+        const startAngle = currentAngle;
+        const endAngle = currentAngle + sectorAngleSize;
+        const midAngle = (startAngle + endAngle) / 2;
+        
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+        ctx.closePath();
+        
+        // Цвет сектора - если есть ставки, используем активный цвет с градиентом
+        const sectorBets = rouletteState.bets[i] || [];
+        const isActive = sectorBets.length > 0 || i === rouletteState.userSector;
+        
+        if (isActive) {
+            // Градиент для активных секторов
+            const gradient = ctx.createRadialGradient(
+                centerX + Math.cos(midAngle) * radius * 0.3,
+                centerY + Math.sin(midAngle) * radius * 0.3,
+                0,
+                centerX + Math.cos(midAngle) * radius * 0.5,
+                centerY + Math.sin(midAngle) * radius * 0.5,
+                radius
+            );
+            gradient.addColorStop(0, activeColor2);
+            gradient.addColorStop(0.5, activeColor1);
+            gradient.addColorStop(1, activeColor3);
+            ctx.fillStyle = gradient;
+        } else {
+            // Градиент для неактивных секторов
+            const gradient = ctx.createRadialGradient(
+                centerX + Math.cos(midAngle) * radius * 0.3,
+                centerY + Math.sin(midAngle) * radius * 0.3,
+                0,
+                centerX + Math.cos(midAngle) * radius * 0.5,
+                centerY + Math.sin(midAngle) * radius * 0.5,
+                radius
+            );
+            gradient.addColorStop(0, baseColor2);
+            gradient.addColorStop(1, baseColor1);
+            ctx.fillStyle = gradient;
+        }
+        ctx.fill();
+        
+        // Обводка для активных секторов (серые тона)
+        if (isActive) {
+            ctx.strokeStyle = '#666666';
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 0;
+        } else {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.lineWidth = 1;
+            ctx.shadowBlur = 0;
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        
+        // Разделительные линии между секторами
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(
+            centerX + Math.cos(startAngle) * radius,
+            centerY + Math.sin(startAngle) * radius
+        );
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        
+        // Аватары в секторах
+        if (sectorBets.length > 0) {
+            const avatarRadius = radius * 0.72;
+            const avatarX = centerX + Math.cos(midAngle) * avatarRadius;
+            const avatarY = centerY + Math.sin(midAngle) * avatarRadius;
+            
+            // Рисуем аватары (первые 3)
+            sectorBets.slice(0, 3).forEach((bet, idx) => {
+                const offset = (idx - 1) * 20;
+                const x = avatarX + Math.cos(midAngle + Math.PI / 2) * offset;
+                const y = avatarY + Math.sin(midAngle + Math.PI / 2) * offset;
+                
+                // Круг для аватара (серые тона)
+                ctx.beginPath();
+                ctx.arc(x, y, 20, 0, 2 * Math.PI);
+                ctx.fillStyle = '#000';
+                ctx.fill();
+                
+                // Обводка (серый)
+                ctx.strokeStyle = '#666666';
+                ctx.lineWidth = 2;
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+                
+                // Загрузка и отрисовка аватара
+                if (bet.avatar) {
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = () => {
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(x, y, 18, 0, 2 * Math.PI);
+                        ctx.clip();
+                        ctx.drawImage(img, x - 18, y - 18, 36, 36);
+                        ctx.restore();
+                        // Перерисовываем после загрузки
+                        if (!rouletteState.isSpinning) {
+                            drawRouletteWheel();
+                        }
+                    };
+                    img.onerror = () => {
+                        // Если аватар не загрузился, рисуем инициал (серый)
+                        ctx.save();
+                        ctx.fillStyle = '#888888';
+                        ctx.font = 'bold 14px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText('?', x, y);
+                        ctx.restore();
+                    };
+                    img.src = bet.avatar;
+                }
+            });
+        }
+        
+        currentAngle = endAngle;
+    }
+    
+    // Восстанавливаем контекст
+    ctx.restore();
+    
+    // Внешняя обводка (серые тона)
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    ctx.strokeStyle = '#555555';
+    ctx.lineWidth = 4;
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+}
+
+// Вычисление размеров секторов на основе процентов ставок
+function calculateSectorSizes() {
+    const sizes = new Array(rouletteState.sectors).fill(0);
+    
+    if (rouletteState.totalBets === 0) {
+        // Если нет ставок, все секторы равны
+        return sizes.map(() => 1 / rouletteState.sectors);
+    }
+    
+    // Вычисляем процент каждой ставки по секторам
+    const sectorTotals = {};
+    let totalWithBets = 0;
+    
+    for (let sector = 0; sector < rouletteState.sectors; sector++) {
+        const sectorBets = rouletteState.bets[sector] || [];
+        let sectorTotal = 0;
+        
+        sectorBets.forEach(bet => {
+            sectorTotal += bet.bet || 0;
+        });
+        
+        if (sectorTotal > 0) {
+            sectorTotals[sector] = sectorTotal;
+            totalWithBets += sectorTotal;
+        }
+    }
+    
+    // Если есть ставки, распределяем пропорционально
+    if (totalWithBets > 0) {
+        for (let i = 0; i < rouletteState.sectors; i++) {
+            if (sectorTotals[i]) {
+                sizes[i] = sectorTotals[i] / rouletteState.totalBets;
+            } else {
+                // Незанятые секторы получают минимальный размер
+                sizes[i] = 0.01; // 1% минимум
+            }
+        }
+        
+        // Нормализуем чтобы сумма была 1
+        const sum = sizes.reduce((a, b) => a + b, 0);
+        if (sum > 0) {
+            for (let i = 0; i < sizes.length; i++) {
+                sizes[i] = sizes[i] / sum;
+            }
+        }
+    } else {
+        // Если нет ставок, все равны
+        for (let i = 0; i < sizes.length; i++) {
+            sizes[i] = 1 / rouletteState.sectors;
+        }
+    }
+    
+    return sizes;
+}
+
+// Обновление аватарки в центре - больше не используется, только счетчик
+function updateCenterAvatar(avatarUrl) {
+    // Аватар больше не показываем в центре, только счетчик
+    // Функция оставлена для совместимости, но ничего не делает
+}
+
+// Загрузка данных рулетки
+async function loadRouletteData() {
+    try {
+        const response = await fetch(`${API_BASE}/roulette/data`, {
+            headers: {
+                'X-Telegram-Init-Data': getInitData()
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Обновляем статистику
+            const participants = data.participants || 0;
+            document.getElementById('roulette-participants').textContent = participants;
+            document.getElementById('roulette-total-bets').textContent = `$${(data.total_bets || 0).toFixed(2)}`;
+            document.getElementById('roulette-user-bet').textContent = `$${(data.user_bet || 0).toFixed(2)}`;
+            
+            // Обновляем номер игры и количество игроков
+            document.getElementById('roulette-game-id').textContent = data.game_id || '-';
+            document.getElementById('roulette-players-count').textContent = participants;
+            
+            // Обновляем ставки и общую сумму
+            rouletteState.bets = data.bets || {};
+            rouletteState.totalBets = data.total_bets || 0;
+            rouletteState.userBet = data.user_bet || 0;
+            rouletteState.userSector = data.user_sector || null;
+            
+            // Обновляем игроков
+            updateRoulettePlayers(data.players || []);
+            
+            // Аватар больше не показываем в центре
+            
+            // Обновляем счетчик - начинаем только при 2+ игроках
+            if (data.countdown !== undefined) {
+                rouletteState.countdown = data.countdown;
+                
+                // Начинаем отсчет только если есть минимум 2 игрока
+                if (participants >= rouletteState.minPlayers) {
+                    if (!rouletteState.countdownStarted) {
+                        rouletteState.countdownStarted = true;
+                        startCountdown();
+                    } else if (!rouletteState.countdownInterval) {
+                        // Если отсчет уже начался, но интервал остановлен, перезапускаем
+                        startCountdown();
+                    }
+                    updateCountdown();
+                } else {
+                    // Если игроков меньше 2, останавливаем счетчик
+                    if (rouletteState.countdownInterval) {
+                        clearInterval(rouletteState.countdownInterval);
+                        rouletteState.countdownInterval = null;
+                    }
+                    rouletteState.countdownStarted = false;
+                    const countdownEl = document.getElementById('roulette-countdown');
+                    if (countdownEl) {
+                        countdownEl.textContent = 'Ждем...';
+                        countdownEl.style.fontSize = '24px';
+                    }
+                }
+            }
+            
+            // Перерисовываем колесо
+            drawRouletteWheel();
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки данных рулетки:', error);
+    }
+}
+
+// Обновление списка игроков
+function updateRoulettePlayers(players) {
+    const container = document.getElementById('roulette-players');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    players.forEach(player => {
+        const avatar = document.createElement('img');
+        avatar.className = 'roulette-player-avatar';
+        avatar.src = player.avatar || 'https://via.placeholder.com/40';
+        avatar.alt = player.name || 'Player';
+        avatar.onerror = () => {
+            avatar.style.display = 'none';
+        };
+        container.appendChild(avatar);
+    });
+}
+
+// Обновление счетчика
+function updateCountdown() {
+    const countdownEl = document.getElementById('roulette-countdown');
+    if (countdownEl) {
+        countdownEl.textContent = rouletteState.countdown;
+        countdownEl.style.fontSize = '42px'; // Возвращаем нормальный размер
+        
+        // Плавная анимация без ярких цветов
+        countdownEl.style.animation = 'countdownPulse 2s ease-in-out infinite';
+        countdownEl.style.color = '#888888'; // Серый цвет
+    }
+}
+
+// Запуск счетчика
+function startCountdown() {
+    if (rouletteState.countdownInterval) {
+        clearInterval(rouletteState.countdownInterval);
+    }
+    
+    // Обновляем счетчик сразу
+    updateCountdown();
+    
+    rouletteState.countdownInterval = setInterval(() => {
+        rouletteState.countdown--;
+        updateCountdown();
+        
+        // Когда счетчик доходит до 0, запускаем вращение колеса
+        if (rouletteState.countdown <= 0) {
+            clearInterval(rouletteState.countdownInterval);
+            rouletteState.countdownInterval = null;
+            spinWheel();
+        }
+    }, 1000);
+}
+
+// Вращение колеса
+async function spinWheel() {
+    if (rouletteState.isSpinning) return;
+    
+    rouletteState.isSpinning = true;
+    const countdownEl = document.getElementById('roulette-countdown');
+    const wheelEl = document.getElementById('roulette-wheel');
+    
+    if (countdownEl) {
+        countdownEl.textContent = '🎰';
+        countdownEl.style.fontSize = '48px';
+    }
+    
+    // Добавляем класс для анимации вращения
+    if (wheelEl) {
+        wheelEl.classList.add('is-spinning');
+        const wrapper = wheelEl.closest('.roulette-wheel-wrapper');
+        if (wrapper) {
+            wrapper.classList.add('is-spinning');
+        }
+    }
+    
+        // Определяем выигрышный сектор (случайный)
+    const winningSector = Math.floor(Math.random() * rouletteState.sectors);
+    
+    // Анимация вращения (плавная, без резких движений)
+    const spinDuration = 3000 + Math.random() * 1000; // 3-4 секунды
+    const totalRotations = 5 + Math.random() * 2; // 5-7 полных оборотов
+    const sectorAngle = 360 / rouletteState.sectors;
+    const finalAngle = (winningSector * sectorAngle) + (totalRotations * 360);
+    
+    const startTime = Date.now();
+    const startRotation = rouletteState.currentRotation;
+    
+    // Плавная easing функция без резких движений
+    function smoothEase(t) {
+        // Плавное замедление без пружинных эффектов
+        return 1 - Math.pow(1 - t, 3);
+    }
+    
+    function animate() {
+        const currentTime = Date.now();
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / spinDuration, 1);
+        
+        // Используем плавную easing функцию
+        const easedProgress = smoothEase(progress);
+        
+        // Вычисляем текущий угол с учетом easing
+        rouletteState.currentRotation = startRotation + (finalAngle * easedProgress);
+        
+        drawRouletteWheel();
+        
+        // Обновляем текст счетчика во время вращения
+        if (countdownEl && progress < 0.95) {
+            countdownEl.textContent = '...';
+        }
+        
+        if (progress < 1) {
+            rouletteState.spinningAnimation = requestAnimationFrame(animate);
+        } else {
+            // Анимация завершена
+            rouletteState.currentRotation = startRotation + finalAngle;
+            drawRouletteWheel();
+            
+            // Убираем класс анимации
+            if (wheelEl) {
+                wheelEl.classList.remove('is-spinning');
+                const wrapper = wheelEl.closest('.roulette-wheel-wrapper');
+                if (wrapper) {
+                    wrapper.classList.remove('is-spinning');
+                }
+            }
+            
+            rouletteState.isSpinning = false;
+            
+            // Небольшая задержка перед отправкой результата
+            setTimeout(() => {
+                finishRound(winningSector);
+            }, 300);
+        }
+    }
+    
+    animate();
+}
+
+// Завершение раунда
+async function finishRound(winningSector) {
+    try {
+        const response = await fetch(`${API_BASE}/roulette/finish`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Init-Data': getInitData()
+            },
+            body: JSON.stringify({ winning_sector: winningSector })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Показываем результат
+            const countdownEl = document.getElementById('roulette-countdown');
+            if (countdownEl) {
+                if (data.winner) {
+                    countdownEl.textContent = `Победитель: ${data.winner.username || 'Игрок'}!`;
+                    showToast(`🎉 Выигрыш: $${data.win_amount?.toFixed(2) || '0.00'}`);
+                } else {
+                    countdownEl.textContent = 'Раунд завершен';
+                }
+            }
+            
+            // Обновляем данные
+            await loadUserData();
+            await loadRouletteData();
+            
+            // Сбрасываем состояние для нового раунда
+            setTimeout(() => {
+                rouletteState.countdown = 60;
+                rouletteState.countdownStarted = false;
+                rouletteState.currentRotation = 0;
+                if (countdownEl) {
+                    countdownEl.textContent = '60';
+                }
+                drawRouletteWheel();
+            }, 5000);
+        }
+    } catch (error) {
+        console.error('Ошибка завершения раунда:', error);
+    }
+}
+
+// Добавление к ставке
+function addToBet() {
+    const betInput = document.getElementById('roulette-bet-input');
+    if (!betInput) return;
+    
+    // Нормализуем значение (заменяем запятую на точку)
+    const normalizedValue = betInput.value.replace(',', '.');
+    const currentBet = parseFloat(normalizedValue) || 0;
+    const addAmount = appState.baseBet || 1.0;
+    const newBet = currentBet + addAmount;
+    
+    // Проверяем баланс
+    if (newBet > appState.balance) {
+        showToast('Недостаточно средств');
+        betInput.value = appState.balance.toFixed(2);
+        return;
+    }
+    
+    betInput.value = newBet.toFixed(2);
+    betInput.focus();
+}
+
+// Размещение ставки
+async function placeRouletteBet() {
+    const betInput = document.getElementById('roulette-bet-input');
+    if (!betInput) {
+        console.error('Поле ввода ставки не найдено');
+        showToast('Ошибка: поле ввода ставки не найдено');
+        return;
+    }
+    
+    // Нормализуем значение (заменяем запятую на точку)
+    const normalizedValue = betInput.value.replace(',', '.');
+    const bet = parseFloat(normalizedValue);
+    
+    if (!bet || isNaN(bet) || bet < 0.1) {
+        showToast('Минимальная ставка: $0.10');
+        // Восстанавливаем корректное значение
+        betInput.value = '1,00';
+        return;
+    }
+    
+    if (bet > appState.balance) {
+        showToast('Недостаточно средств');
+        return;
+    }
+    
+    // Проверяем, не идет ли уже вращение
+    if (rouletteState.isSpinning) {
+        showToast('Дождитесь завершения раунда');
+        return;
+    }
+    
+    // Блокируем кнопку
+    const betBtn = document.getElementById('btn-place-bet');
+    if (betBtn) {
+        betBtn.disabled = true;
+        betBtn.textContent = 'Размещение...';
+    }
+    
+    try {
+        console.log('Отправка ставки:', bet);
+        const response = await fetch(`${API_BASE}/roulette/bet`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Telegram-Init-Data': getInitData()
+            },
+            body: JSON.stringify({ bet })
+        });
+        
+        console.log('Ответ сервера:', response.status);
+        
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Данные ответа:', data);
+            showToast('Ставка размещена!');
+            
+            // Аватар больше не показываем в центре
+            
+            await loadUserData(); // Обновляем баланс
+            await loadRouletteData(); // Обновляем данные рулетки
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            console.error('Ошибка ответа:', errorData);
+            showToast(errorData.error || 'Ошибка размещения ставки');
+        }
+    } catch (error) {
+        console.error('Ошибка размещения ставки:', error);
+        showToast('Ошибка размещения ставки: ' + error.message);
+    } finally {
+        // Разблокируем кнопку
+        if (betBtn) {
+            betBtn.disabled = false;
+            betBtn.textContent = 'Поставить';
+        }
+    }
+}
+
+// Загрузка топа
+async function loadRouletteTop() {
+    const container = document.getElementById('roulette-top-content');
+    if (!container) return;
+    
+    try {
+        const endpoint = rouletteState.topTab === 'games' 
+            ? `${API_BASE}/roulette/top/games`
+            : `${API_BASE}/roulette/top/users`;
+        
+        const response = await fetch(endpoint, {
+            headers: {
+                'X-Telegram-Init-Data': getInitData()
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            renderRouletteTop(data.items || []);
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки топа:', error);
+    }
+}
+
+// Отрисовка топа
+function renderRouletteTop(items) {
+    const container = document.getElementById('roulette-top-content');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    if (items.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">Пока нет данных</div>';
+        return;
+    }
+    
+    items.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.className = 'roulette-top-item';
+        
+        const avatar = item.avatar || 'https://via.placeholder.com/40';
+        const name = item.name || item.username || 'Игрок';
+        const value = rouletteState.topTab === 'games' 
+            ? `Игра #${item.game_id || index + 1}`
+            : `$${(item.total || 0).toFixed(2)}`;
+        
+        div.innerHTML = `
+            <div class="roulette-top-rank">${index + 1}</div>
+            <img class="roulette-top-avatar" src="${avatar}" alt="${name}" onerror="this.style.display='none'">
+            <div class="roulette-top-info">
+                <div class="roulette-top-name">${name}</div>
+                <div class="roulette-top-value">${value}</div>
+            </div>
+        `;
+        
+        container.appendChild(div);
+    });
+}
+
+// Загрузка стикера ruletka_base (больше не используется)
+async function loadRouletteBaseSticker() {
+    // Аватар больше не показываем в центре, только счетчик
+    // Функция оставлена для совместимости
+}
+
+// Открытие страницы рулетки
+async function openRoulettePage() {
+    const loadingEl = document.getElementById('roulette-loading');
+    const contentEl = document.getElementById('roulette-content');
+
+    if (loadingEl) loadingEl.classList.remove('hidden');
+    if (contentEl) contentEl.style.display = 'none';
+
+    try {
+        // Инициализируем обработчики событий для кнопок ставок
+        initRoulette();
+        
+        // Инициализируем Canvas если еще не инициализирован
+        if (!rouletteState.wheelCanvas || !rouletteState.wheelCtx) {
+            const canvas = document.getElementById('roulette-wheel');
+            if (canvas) {
+                rouletteState.wheelCanvas = canvas;
+                rouletteState.wheelCtx = canvas.getContext('2d');
+                resizeRouletteCanvas();
+            }
+        }
+
+        // Загружаем данные
+        await loadRouletteData();
+        
+        // Аватар больше не показываем в центре
+        
+        // Запускаем автообновление
+        startRouletteAutoRefresh();
+        
+        // Счетчик запустится автоматически при загрузке данных если есть 2+ игрока
+    } catch (error) {
+        console.error('Ошибка загрузки рулетки:', error);
+        showToast('Ошибка загрузки рулетки');
+    } finally {
+        if (loadingEl) loadingEl.classList.add('hidden');
+        if (contentEl) contentEl.style.display = 'block';
+    }
+}
+
+// Закрытие страницы рулетки
+function closeRoulettePage() {
+    if (rouletteState.countdownInterval) {
+        clearInterval(rouletteState.countdownInterval);
+        rouletteState.countdownInterval = null;
+    }
+    
+    if (rouletteState.refreshInterval) {
+        clearInterval(rouletteState.refreshInterval);
+        rouletteState.refreshInterval = null;
+    }
+}
+
+// Автообновление каждые 0.5 секунд
+function startRouletteAutoRefresh() {
+    if (rouletteState.refreshInterval) {
+        clearInterval(rouletteState.refreshInterval);
+    }
+    
+    rouletteState.refreshInterval = setInterval(() => {
+        loadRouletteData();
+    }, 500);
+}
+
+
+// Инициализация при загрузке удалена - теперь инициализация происходит
+// при вызове initPages() и при открытии страницы рулетки через openRoulettePage()

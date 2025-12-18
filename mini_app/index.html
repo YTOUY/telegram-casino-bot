@@ -38,6 +38,7 @@
                 <div class="games-grid" id="games-grid">
                     <!-- Игры будут добавлены через JS -->
                 </div>
+                
             </div>
 
             <!-- Страница Кошелек -->
@@ -94,6 +95,17 @@
                             <div class="profile-name-enhanced" id="profile-name">Пользователь</div>
                             <div class="profile-username-enhanced" id="profile-username">@username</div>
                         </div>
+                    </div>
+
+                    <!-- Кошелек в профиле -->
+                    <div class="wallet-section-profile">
+                        <button class="btn-primary btn-wallet-profile" id="btn-wallet-profile" style="width: 100%; margin-bottom: 20px;">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
+                                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+                                <line x1="1" y1="10" x2="23" y2="10"></line>
+                            </svg>
+                            Кошелек
+                        </button>
                     </div>
 
                     <!-- Реферальная система -->
@@ -428,6 +440,75 @@
                 </div>
             </div>
 
+            <!-- Страница Рулетка -->
+            <div id="page-roulette" class="page">
+                <!-- Заголовок и бейджи скрыты -->
+                
+                <!-- Индикатор загрузки -->
+                <div id="roulette-loading" class="roulette-loading hidden">
+                    <div class="loading-spinner"></div>
+                    <div class="loading-text">Загрузка рулетки...</div>
+                </div>
+                
+                <!-- Основной контент рулетки -->
+                <div id="roulette-content" class="roulette-content">
+                    <!-- Статистика -->
+                    <div class="roulette-stats">
+                        <div class="roulette-stat-item">
+                            <div class="stat-label">Участников</div>
+                            <div class="stat-value" id="roulette-participants">0</div>
+                        </div>
+                        <div class="roulette-stat-item">
+                            <div class="stat-label">Всего ставок</div>
+                            <div class="stat-value" id="roulette-total-bets">$0.00</div>
+                        </div>
+                        <div class="roulette-stat-item">
+                            <div class="stat-label">Твоя ставка</div>
+                            <div class="stat-value" id="roulette-user-bet">$0.00</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Игроки с аватарами -->
+                    <div class="roulette-players" id="roulette-players">
+                        <!-- Аватары игроков будут добавлены через JS -->
+                    </div>
+                    
+                    <!-- Рулетка -->
+                    <div class="roulette-container">
+                        <div class="roulette-wheel-wrapper">
+                            <!-- Указатель -->
+                            <div class="roulette-pointer"></div>
+                            
+                            <!-- Колесо рулетки -->
+                            <canvas id="roulette-wheel" class="roulette-wheel"></canvas>
+                            
+                            <!-- Центральный круг со счетчиком -->
+                            <div class="roulette-center">
+                                <div class="roulette-countdown" id="roulette-countdown">60</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Панель ставок -->
+                    <div class="roulette-bet-panel">
+                        <div class="bet-input-container">
+                            <label class="bet-label">Ваша ставка ($)</label>
+                            <div class="bet-input-wrapper">
+                                <input type="number" id="roulette-bet-input" class="bet-input" step="0.01" min="0.1" placeholder="0.00" value="1.00">
+                                <button class="btn-bet btn-add-bet" id="btn-add-bet" title="Добавить к ставке">+</button>
+                                <button class="btn-bet" id="btn-place-bet">Поставить</button>
+                            </div>
+                            <div class="bet-quick-buttons-roulette">
+                                <button class="bet-quick-btn-roulette" data-value="0.1">$0.10</button>
+                                <button class="bet-quick-btn-roulette" data-value="base">BASE</button>
+                                <button class="bet-quick-btn-roulette" data-value="5">$5</button>
+                                <button class="bet-quick-btn-roulette" data-value="10">$10</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Страница Игры -->
             <div id="page-game" class="page">
                 <div class="page-header">
@@ -552,18 +633,22 @@
                 </svg>
                 <span class="nav-label">Настройки</span>
             </button>
-            <button class="nav-btn" data-page="wallet">
-                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
-                    <line x1="1" y1="10" x2="23" y2="10"></line>
-                </svg>
-                <span class="nav-label">Кошелек</span>
-            </button>
             <button class="nav-btn active" data-page="play">
                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
                 </svg>
                 <span class="nav-label">Играть</span>
+            </button>
+            <button class="nav-btn" data-page="roulette">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <circle cx="12" cy="12" r="6"></circle>
+                    <line x1="12" y1="2" x2="12" y2="6"></line>
+                    <line x1="12" y1="18" x2="12" y2="22"></line>
+                    <line x1="2" y1="12" x2="6" y2="12"></line>
+                    <line x1="18" y1="12" x2="22" y2="12"></line>
+                </svg>
+                <span class="nav-label">Рулетка</span>
             </button>
             <button class="nav-btn" data-page="top">
                 <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

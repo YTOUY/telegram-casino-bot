@@ -12,7 +12,7 @@
     --bg-nav: #000000; /* Черная панель */
     --text-primary: #ffffff;
     --text-secondary: #888888;
-    --accent-green: #00ff88; /* Яркий зеленый для текста как на скриншоте */
+    --accent-green: #888888; /* Серый цвет вместо яркого зеленого */
     --accent-red: #cc4444; /* Не яркий красный */
     --accent-gray: #666666; /* Серый */
     --border-color: rgba(255, 255, 255, 0.1);
@@ -4334,6 +4334,660 @@ body {
     
     .podium-value {
         order: 4;
+    }
+}
+
+/* ========== РУЛЕТКА ========== */
+
+.roulette-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    min-height: 400px;
+}
+
+.roulette-loading.hidden {
+    display: none;
+}
+
+.loading-spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(255, 255, 255, 0.1);
+    border-top-color: var(--accent-green);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 20px;
+}
+
+.loading-text {
+    color: var(--text-secondary);
+    font-size: 16px;
+}
+
+.roulette-content {
+    padding: 20px;
+    max-width: 100%;
+    margin: 0 auto;
+    position: relative;
+    background: radial-gradient(ellipse at top, rgba(139, 92, 246, 0.05) 0%, transparent 50%);
+}
+
+.roulette-content::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+        radial-gradient(circle at 20% 30%, rgba(50, 50, 50, 0.05) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(40, 40, 40, 0.05) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.roulette-content > * {
+    position: relative;
+    z-index: 1;
+}
+
+@keyframes backgroundShift {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+/* Статистика рулетки */
+.roulette-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 24px;
+    background: linear-gradient(135deg, 
+        rgba(20, 20, 20, 0.95), 
+        rgba(30, 30, 30, 0.95),
+        rgba(20, 20, 20, 0.95));
+    border-radius: 24px;
+    border: 1px solid #333333;
+    box-shadow: 
+        0 4px 20px rgba(0, 0, 0, 0.5),
+        inset 0 0 20px rgba(0, 0, 0, 0.3);
+    position: relative;
+}
+
+.roulette-stat-item {
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.stat-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: #aaaaaa;
+    animation: valuePulse 3s ease-in-out infinite;
+    position: relative;
+    letter-spacing: 0.5px;
+}
+
+@keyframes valuePulse {
+    0%, 100% {
+        opacity: 0.8;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* Игроки с аватарами */
+.roulette-players {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 20px;
+    justify-content: center;
+}
+
+.roulette-player-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 2px solid #555555;
+    object-fit: cover;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+}
+
+.roulette-player-avatar:hover {
+    border-color: #777777;
+    opacity: 0.9;
+}
+
+/* Контейнер рулетки */
+.roulette-container {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 30px 0;
+    min-height: 400px;
+    padding: 20px;
+}
+
+.roulette-wheel-wrapper {
+    position: relative;
+    width: 100%;
+    max-width: 400px;
+    aspect-ratio: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    filter: drop-shadow(0 10px 40px rgba(139, 92, 246, 0.4));
+}
+
+/* Указатель */
+.roulette-pointer {
+    position: absolute;
+    top: -15px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 18px solid transparent;
+    border-right: 18px solid transparent;
+    border-top: 35px solid #666666;
+    z-index: 10;
+    filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.5));
+    transition: all 0.3s ease;
+}
+
+/* Колесо рулетки */
+.roulette-wheel {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 4px solid #333333;
+    background: var(--bg-primary);
+    box-shadow: 
+        0 0 20px rgba(0, 0, 0, 0.5),
+        inset 0 0 40px rgba(0, 0, 0, 0.6);
+    transition: transform 0.05s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+}
+
+.roulette-wheel.is-spinning {
+    animation: wheelSpin 0.1s linear infinite;
+}
+
+@keyframes wheelSpin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Центральный круг - только для счетчика */
+.roulette-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 35%;
+    height: 35%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, 
+        rgba(0, 0, 0, 0.9), 
+        rgba(20, 20, 20, 0.8),
+        rgba(0, 0, 0, 0.95));
+    border: 2px solid #444444;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+    box-shadow: 
+        0 0 20px rgba(0, 0, 0, 0.8),
+        inset 0 0 30px rgba(0, 0, 0, 0.6);
+}
+
+/* Счетчик */
+.roulette-countdown {
+    font-size: 36px;
+    font-weight: 600;
+    color: #888888;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 6;
+    letter-spacing: 1px;
+    font-family: 'Arial', sans-serif;
+    animation: countdownPulse 2s ease-in-out infinite;
+}
+
+@keyframes countdownPulse {
+    0%, 100% {
+        opacity: 0.7;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* Стикер/Аватар в центре */
+.roulette-base-sticker {
+    width: 0;
+    height: 0;
+    display: none; /* Скрываем аватар в центре */
+    position: relative;
+    z-index: 5;
+}
+
+.roulette-base-sticker img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 4px solid var(--accent-green);
+    box-shadow: 
+        0 0 25px rgba(0, 255, 136, 0.8),
+        0 0 50px rgba(0, 255, 136, 0.4),
+        inset 0 0 15px rgba(0, 0, 0, 0.3);
+    animation: avatarPulse 2s ease-in-out infinite, avatarRotate 20s linear infinite;
+    position: relative;
+}
+
+.roulette-base-sticker img::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    right: -4px;
+    bottom: -4px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    border-top-color: rgba(0, 255, 136, 0.6);
+    animation: avatarRotate 3s linear infinite;
+}
+
+.roulette-base-sticker div {
+    animation: avatarPulse 2s ease-in-out infinite, avatarRotate 20s linear infinite;
+    border: 4px solid var(--accent-green);
+    box-shadow: 
+        0 0 25px rgba(0, 255, 136, 0.8),
+        0 0 50px rgba(0, 255, 136, 0.4),
+        inset 0 0 15px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes avatarPulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 
+            0 0 25px rgba(0, 255, 136, 0.8),
+            0 0 50px rgba(0, 255, 136, 0.4),
+            inset 0 0 15px rgba(0, 0, 0, 0.3);
+    }
+    50% {
+        transform: scale(1.08);
+        box-shadow: 
+            0 0 35px rgba(0, 255, 136, 1),
+            0 0 70px rgba(0, 255, 136, 0.6),
+            inset 0 0 15px rgba(0, 0, 0, 0.3);
+    }
+}
+
+@keyframes avatarRotate {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Панель ставок */
+.roulette-bet-panel {
+    background: linear-gradient(135deg, 
+        rgba(20, 20, 20, 0.95), 
+        rgba(30, 30, 30, 0.95),
+        rgba(20, 20, 20, 0.95));
+    border-radius: 24px;
+    padding: 28px;
+    margin-bottom: 20px;
+    border: 1px solid #333333;
+    box-shadow: 
+        0 4px 20px rgba(0, 0, 0, 0.5),
+        inset 0 0 20px rgba(0, 0, 0, 0.3);
+    position: relative;
+}
+
+.bet-input-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.bet-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.bet-input-wrapper {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.bet-input {
+    flex: 1;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, rgba(30, 30, 50, 0.95), rgba(40, 30, 60, 0.95));
+    border: 2px solid rgba(139, 92, 246, 0.3);
+    border-radius: 14px;
+    color: var(--text-primary);
+    font-size: 18px;
+    font-weight: 700;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 
+        inset 0 2px 8px rgba(0, 0, 0, 0.3),
+        0 0 0 0 rgba(0, 255, 136, 0);
+}
+
+.bet-input:focus {
+    outline: none;
+    border-color: var(--accent-green);
+    box-shadow: 
+        inset 0 2px 8px rgba(0, 0, 0, 0.3),
+        0 0 0 4px rgba(0, 255, 136, 0.2),
+        0 0 20px rgba(0, 255, 136, 0.3);
+    background: linear-gradient(135deg, rgba(30, 30, 50, 1), rgba(40, 30, 60, 1));
+    transform: scale(1.02);
+}
+
+.btn-bet {
+    padding: 16px 28px;
+    background: #333333;
+    border: 1px solid #555555;
+    border-radius: 14px;
+    color: #cccccc;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.btn-add-bet {
+    padding: 16px 20px;
+    min-width: 50px;
+    font-size: 22px;
+    background: #2a2a2a;
+    border: 1px solid #444444;
+    color: #aaaaaa;
+}
+
+.btn-bet:hover {
+    background: #3a3a3a;
+    border-color: #666666;
+    color: #dddddd;
+}
+
+.btn-bet:active {
+    background: #2a2a2a;
+    transform: translateY(1px);
+}
+
+.btn-bet:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.bet-quick-buttons-roulette {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.bet-quick-btn-roulette {
+    flex: 1;
+    min-width: 70px;
+    padding: 12px 16px;
+    background: #2a2a2a;
+    border: 1px solid #444444;
+    border-radius: 12px;
+    color: #cccccc;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.bet-quick-btn-roulette:hover {
+    background: #3a3a3a;
+    border-color: #555555;
+    color: #dddddd;
+}
+
+.bet-quick-btn-roulette.active {
+    background: #444444;
+    color: #ffffff;
+    border-color: #666666;
+}
+
+/* Информация об игре - скрыта */
+.roulette-game-info {
+    display: none !important;
+}
+
+#page-roulette .page-header {
+    display: none !important;
+}
+
+.roulette-game-info span {
+    padding: 6px 12px;
+    background: rgba(139, 92, 246, 0.1);
+    border-radius: 12px;
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.roulette-game-info span:hover {
+    background: rgba(139, 92, 246, 0.2);
+    border-color: rgba(139, 92, 246, 0.4);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
+}
+
+#page-roulette .page-header h1 {
+    background: linear-gradient(135deg, #8b5cf6, #ec4899, #f59e0b);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-shadow: 0 0 30px rgba(139, 92, 246, 0.5);
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    animation: titleShine 3s ease-in-out infinite;
+    position: relative;
+}
+
+#page-roulette .page-header h1::after {
+    content: '🎰';
+    position: absolute;
+    right: -40px;
+    top: 50%;
+    transform: translateY(-50%);
+    animation: emojiSpin 2s ease-in-out infinite;
+    filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.6));
+}
+
+@keyframes titleShine {
+    0%, 100% {
+        filter: brightness(1);
+    }
+    50% {
+        filter: brightness(1.3);
+    }
+}
+
+@keyframes emojiSpin {
+    0%, 100% {
+        transform: translateY(-50%) rotate(0deg) scale(1);
+    }
+    25% {
+        transform: translateY(-50%) rotate(-10deg) scale(1.1);
+    }
+    75% {
+        transform: translateY(-50%) rotate(10deg) scale(1.1);
+    }
+}
+
+.roulette-live-indicator {
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    position: relative;
+    padding: 4px 12px;
+    border-radius: 12px;
+    background: rgba(100, 100, 100, 0.2);
+    border: 1px solid #555555;
+    color: #888888;
+    animation: liveIndicatorPulse 3s ease-in-out infinite;
+}
+
+.roulette-live-indicator::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 8px;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #666666;
+}
+
+@keyframes liveIndicatorPulse {
+    0%, 100% {
+        opacity: 0.7;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* Кнопка чат */
+.btn-chat {
+    transition: all 0.2s ease;
+}
+
+.btn-chat:hover {
+    transform: scale(1.1);
+    color: var(--accent-green);
+}
+
+/* Анимации для секторов */
+@keyframes sectorGlow {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
+}
+
+.roulette-sector-active {
+    animation: sectorGlow 1s ease-in-out infinite;
+}
+
+/* Эффект частиц при вращении */
+.roulette-wheel-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.roulette-wheel-wrapper.is-spinning::after {
+    opacity: 1;
+    background: radial-gradient(circle, 
+        transparent 0%,
+        transparent 40%,
+        rgba(139, 92, 246, 0.1) 50%,
+        rgba(139, 92, 246, 0.05) 60%,
+        transparent 70%);
+    animation: wheelParticles 2s ease-in-out infinite;
+}
+
+@keyframes wheelParticles {
+    0%, 100% {
+        transform: translate(-50%, -50%) rotate(0deg) scale(1);
+        opacity: 0.3;
+    }
+    50% {
+        transform: translate(-50%, -50%) rotate(180deg) scale(1.1);
+        opacity: 0.6;
+    }
+}
+
+/* Адаптивность */
+@media (max-width: 480px) {
+    .roulette-wheel-wrapper {
+        max-width: 100%;
+    }
+    
+    .roulette-stats {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        padding: 16px;
+    }
+    
+    .stat-value {
+        font-size: 18px;
+    }
+    
+    .roulette-countdown {
+        font-size: 32px;
+    }
+    
+    .bet-input-wrapper {
+        flex-direction: column;
+    }
+    
+    .btn-bet {
+        width: 100%;
+    }
+    
+    .roulette-pointer {
+        top: -15px;
+        border-left-width: 18px;
+        border-right-width: 18px;
+        border-top-width: 35px;
     }
 }
 
