@@ -5395,6 +5395,36 @@ function startCountdown() {
     }, 1000);
 }
 
+// Вычисление выигрышного сектора по текущему углу поворота
+function calculateWinningSectorFromRotation() {
+    // Указатель находится вверху (0° или -90°)
+    // Секторы начинаются сверху с -Math.PI/2
+    // После поворота на currentRotation, нужно найти, какой сектор под указателем
+    
+    const sectorAngleRad = (2 * Math.PI) / rouletteState.sectors;
+    
+    // Текущий угол поворота в радианах
+    const rotationRad = (rouletteState.currentRotation * Math.PI) / 180;
+    
+    // Угол под указателем (вверху = -90° = -Math.PI/2)
+    const pointerAngle = -Math.PI / 2;
+    
+    // Обратный поворот: какой угол был под указателем до поворота
+    const angleUnderPointer = pointerAngle - rotationRad;
+    
+    // Нормализуем угол в диапазон [0, 2π]
+    let normalizedAngle = angleUnderPointer % (2 * Math.PI);
+    if (normalizedAngle < 0) {
+        normalizedAngle += 2 * Math.PI;
+    }
+    
+    // Вычисляем номер сектора (секторы начинаются сверху)
+    // Добавляем sectorAngleRad/2 чтобы центр сектора был под указателем
+    const sectorIndex = Math.floor((normalizedAngle + sectorAngleRad / 2) / sectorAngleRad) % rouletteState.sectors;
+    
+    return sectorIndex;
+}
+
 // Вращение колеса
 async function spinWheel() {
     if (rouletteState.isSpinning) return;
@@ -5417,14 +5447,37 @@ async function spinWheel() {
         }
     }
     
-        // Определяем выигрышный сектор (случайный)
-    const winningSector = Math.floor(Math.random() * rouletteState.sectors);
+    // Сначала выбираем случайный выигрышный сектор (из тех, где есть ставки)
+    const sectorsWithBets = [];
+    for (let i = 0; i < rouletteState.sectors; i++) {
+        const sectorBets = rouletteState.bets[i] || [];
+        if (sectorBets.length > 0) {
+            sectorsWithBets.push(i);
+        }
+    }
     
-    // Анимация вращения (плавная, без резких движений)
-    const spinDuration = 3000 + Math.random() * 1000; // 3-4 секунды
-    const totalRotations = 5 + Math.random() * 2; // 5-7 полных оборотов
-    const sectorAngle = 360 / rouletteState.sectors;
-    const finalAngle = (winningSector * sectorAngle) + (totalRotations * 360);
+    // Если есть секторы со ставками, выбираем случайный из них
+    // Если нет, выбираем случайный из всех
+    const availableSectors = sectorsWithBets.length > 0 ? sectorsWithBets : 
+                             Array.from({length: rouletteState.sectors}, (_, i) => i);
+    const randomWinningSector = availableSectors[Math.floor(Math.random() * availableSectors.length)];
+    
+    // Вычисляем финальный угол поворота так, чтобы выбранный сектор оказался под указателем (вверху)
+    // Указатель находится вверху (0° или -90°), секторы начинаются сверху с -Math.PI/2
+    // Нужно повернуть колесо так, чтобы центр выигрышного сектора был вверху
+    const sectorAngleDeg = 360 / rouletteState.sectors;
+    const totalRotations = 5 + Math.random() * 2; // 5-7 полных оборотов для эффекта
+    
+    // Угол сектора в радианах
+    const sectorAngleRad = (2 * Math.PI) / rouletteState.sectors;
+    
+    // Центр выигрышного сектора в начальной позиции (секторы начинаются сверху)
+    const winningSectorCenterAngle = -Math.PI / 2 + (randomWinningSector * sectorAngleRad) + (sectorAngleRad / 2);
+    
+    // Чтобы центр сектора оказался вверху (0°), нужно повернуть на противоположный угол
+    // Плюс несколько полных оборотов для эффекта
+    const finalRotationRad = -winningSectorCenterAngle + (totalRotations * 2 * Math.PI);
+    const finalAngle = finalRotationRad * (180 / Math.PI); // Конвертируем в градусы
     
     const startTime = Date.now();
     const startRotation = rouletteState.currentRotation;
@@ -5471,12 +5524,18 @@ async function spinWheel() {
             
             rouletteState.isSpinning = false;
             
+            // Вычисляем реальный выигрышный сектор по положению указателя
+            const actualWinningSector = calculateWinningSectorFromRotation();
+            
             // Небольшая задержка перед отправкой результата
             setTimeout(() => {
-                finishRound(winningSector);
+                finishRound(actualWinningSector);
             }, 300);
         }
     }
+    
+    // Продолжительность вращения
+    const spinDuration = 3000 + Math.random() * 1000; // 3-4 секунды
     
     animate();
 }
