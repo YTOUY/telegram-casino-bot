@@ -5193,6 +5193,7 @@ function drawRouletteWheel() {
             }
             
             currentAngle = endAngle;
+        }
     }
     
     // Восстанавливаем контекст
@@ -5572,9 +5573,6 @@ async function spinWheel() {
             }, 300);
         }
     }
-    
-    // Продолжительность вращения
-    const spinDuration = 3000 + Math.random() * 1000; // 3-4 секунды
     
     animate();
 }
