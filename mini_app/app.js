@@ -5397,19 +5397,19 @@ function startCountdown() {
 
 // Вычисление выигрышного сектора по текущему углу поворота
 function calculateWinningSectorFromRotation() {
-    // Указатель находится вверху (0° или -90°)
+    // Указатель находится вверху (-90° = -Math.PI/2)
     // Секторы начинаются сверху с -Math.PI/2
     // После поворота на currentRotation, нужно найти, какой сектор под указателем
-    
-    const sectorAngleRad = (2 * Math.PI) / rouletteState.sectors;
     
     // Текущий угол поворота в радианах
     const rotationRad = (rouletteState.currentRotation * Math.PI) / 180;
     
-    // Угол под указателем (вверху = -90° = -Math.PI/2)
+    // Угол под указателем (вверху = -Math.PI/2)
     const pointerAngle = -Math.PI / 2;
     
-    // Обратный поворот: какой угол был под указателем до поворота
+    // Обратный поворот: какой угол был под указателем до поворота колеса
+    // Если колесо повернуто на rotationRad, то элемент в позиции angle теперь в позиции (angle + rotationRad)
+    // Значит, элемент под указателем был в позиции (pointerAngle - rotationRad)
     const angleUnderPointer = pointerAngle - rotationRad;
     
     // Нормализуем угол в диапазон [0, 2π]
@@ -5418,11 +5418,34 @@ function calculateWinningSectorFromRotation() {
         normalizedAngle += 2 * Math.PI;
     }
     
-    // Вычисляем номер сектора (секторы начинаются сверху)
-    // Добавляем sectorAngleRad/2 чтобы центр сектора был под указателем
-    const sectorIndex = Math.floor((normalizedAngle + sectorAngleRad / 2) / sectorAngleRad) % rouletteState.sectors;
+    // Вычисляем размеры секторов
+    const sectorSizes = calculateSectorSizes();
     
-    return sectorIndex;
+    // Находим, в какой сектор попадает этот угол
+    let currentAngle = 0; // В нормализованных координатах начинаем с 0
+    for (let i = 0; i < rouletteState.sectors; i++) {
+        const sectorSize = sectorSizes[i] || 0;
+        if (sectorSize > 0) {
+            const sectorAngleSize = sectorSize * 2 * Math.PI;
+            const sectorEndAngle = currentAngle + sectorAngleSize;
+            
+            // Проверяем, попадает ли угол в этот сектор
+            if (normalizedAngle >= currentAngle && normalizedAngle < sectorEndAngle) {
+                return i;
+            }
+            
+            currentAngle = sectorEndAngle;
+        }
+    }
+    
+    // Если не нашли (не должно происходить), возвращаем первый сектор со ставкой
+    for (let i = 0; i < rouletteState.sectors; i++) {
+        if (sectorSizes[i] > 0) {
+            return i;
+        }
+    }
+    
+    return 0; // Fallback
 }
 
 // Вращение колеса
@@ -5447,11 +5470,13 @@ async function spinWheel() {
         }
     }
     
-    // Сначала выбираем случайный выигрышный сектор (из тех, где есть ставки)
+    // Вычисляем размеры секторов
+    const sectorSizes = calculateSectorSizes();
+    
+    // Выбираем случайный выигрышный сектор (из тех, где есть ставки)
     const sectorsWithBets = [];
     for (let i = 0; i < rouletteState.sectors; i++) {
-        const sectorBets = rouletteState.bets[i] || [];
-        if (sectorBets.length > 0) {
+        if (sectorSizes[i] > 0) {
             sectorsWithBets.push(i);
         }
     }
@@ -5460,22 +5485,33 @@ async function spinWheel() {
     // Если нет, выбираем случайный из всех
     const availableSectors = sectorsWithBets.length > 0 ? sectorsWithBets : 
                              Array.from({length: rouletteState.sectors}, (_, i) => i);
-    const randomWinningSector = availableSectors[Math.floor(Math.random() * availableSectors.length)];
+    const randomWinningSectorIndex = Math.floor(Math.random() * availableSectors.length);
+    const randomWinningSector = availableSectors[randomWinningSectorIndex];
     
-    // Вычисляем финальный угол поворота так, чтобы выбранный сектор оказался под указателем (вверху)
-    // Указатель находится вверху (0° или -90°), секторы начинаются сверху с -Math.PI/2
-    // Нужно повернуть колесо так, чтобы центр выигрышного сектора был вверху
-    const sectorAngleDeg = 360 / rouletteState.sectors;
+    // Вычисляем центр выигрышного сектора с учетом размеров секторов
+    // Секторы начинаются сверху с -Math.PI/2
+    let currentAngle = -Math.PI / 2;
+    let winningSectorCenterAngle = -Math.PI / 2;
+    
+    for (let i = 0; i < rouletteState.sectors; i++) {
+        const sectorSize = sectorSizes[i] || 0;
+        if (sectorSize > 0) {
+            const sectorAngleSize = sectorSize * 2 * Math.PI;
+            const midAngle = currentAngle + sectorAngleSize / 2;
+            
+            if (i === randomWinningSector) {
+                winningSectorCenterAngle = midAngle;
+                break;
+            }
+            
+            currentAngle += sectorAngleSize;
+        }
+    }
+    
+    // Вычисляем финальный угол поворота так, чтобы центр выбранного сектора оказался под указателем (вверху)
+    // Указатель находится вверху (-90° или -Math.PI/2)
+    // Чтобы центр сектора оказался вверху, нужно повернуть на противоположный угол
     const totalRotations = 5 + Math.random() * 2; // 5-7 полных оборотов для эффекта
-    
-    // Угол сектора в радианах
-    const sectorAngleRad = (2 * Math.PI) / rouletteState.sectors;
-    
-    // Центр выигрышного сектора в начальной позиции (секторы начинаются сверху)
-    const winningSectorCenterAngle = -Math.PI / 2 + (randomWinningSector * sectorAngleRad) + (sectorAngleRad / 2);
-    
-    // Чтобы центр сектора оказался вверху (0°), нужно повернуть на противоположный угол
-    // Плюс несколько полных оборотов для эффекта
     const finalRotationRad = -winningSectorCenterAngle + (totalRotations * 2 * Math.PI);
     const finalAngle = finalRotationRad * (180 / Math.PI); // Конвертируем в градусы
     
