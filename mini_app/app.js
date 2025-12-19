@@ -4901,7 +4901,7 @@ const rouletteState = {
     totalBets: 0, // Общая сумма всех ставок
     userBet: 0, // Ставка текущего пользователя
     userSector: null, // Сектор текущего пользователя
-    countdown: 60,
+    countdown: 15,
     countdownInterval: null,
     refreshInterval: null,
     wheelCanvas: null,
@@ -5512,7 +5512,7 @@ async function loadRouletteData() {
                 rouletteState.countdown = data.countdown;
             } else if (rouletteState.countdown === undefined || rouletteState.countdown === null) {
                 // Если счетчик не пришел с сервера, устанавливаем начальное значение
-                rouletteState.countdown = 60;
+                rouletteState.countdown = 15;
             }
             
             // Начинаем отсчет только если есть минимум 2 игрока
@@ -5532,7 +5532,7 @@ async function loadRouletteData() {
                     rouletteState.countdownStarted = true;
                     // Убеждаемся что счетчик инициализирован перед запуском
                     if (rouletteState.countdown === undefined || rouletteState.countdown === null) {
-                        rouletteState.countdown = 60;
+                        rouletteState.countdown = 15;
                     }
                     startCountdown();
                 }
@@ -5544,7 +5544,7 @@ async function loadRouletteData() {
                     rouletteState.countdownInterval = null;
                 }
                 rouletteState.countdownStarted = false;
-                rouletteState.countdown = 60;
+                rouletteState.countdown = 15;
                 const countdownEl = document.getElementById('roulette-countdown');
                 if (countdownEl) {
                     countdownEl.textContent = 'Ждем...';
@@ -5866,7 +5866,7 @@ function startCountdown() {
     
     // Убеждаемся, что счетчик инициализирован
     if (rouletteState.countdown === undefined || rouletteState.countdown === null) {
-        rouletteState.countdown = 60;
+        rouletteState.countdown = 15;
     }
     
     // Не запускаем счетчик если он уже на 0 или меньше
@@ -6150,11 +6150,11 @@ async function finishRound(winningSector) {
             
             // Сбрасываем состояние для нового раунда через 5 секунд
             setTimeout(() => {
-                rouletteState.countdown = 60;
+                rouletteState.countdown = 15;
                 rouletteState.countdownStarted = false;
                 rouletteState.currentRotation = 0;
                 if (countdownEl) {
-                    countdownEl.textContent = '60';
+                    countdownEl.textContent = '15';
                     countdownEl.style.fontSize = '42px';
                 }
                 drawRouletteWheel();

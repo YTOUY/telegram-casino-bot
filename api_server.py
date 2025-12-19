@@ -1089,7 +1089,7 @@ async def handle_wallet_deposit_status(request: Request) -> Response:
 ROULETTE_STATE = {
     'current_round': 1,
     'game_id': 1,  # Номер текущей игры
-    'countdown': 60,
+    'countdown': 15,
     'bets': {},  # {sector: [{user_id, bet, avatar, username}]}
     'round_start_time': None
 }
@@ -1171,13 +1171,25 @@ async def handle_roulette_data(request: Request) -> Response:
                         'total_bet': 0.0,
                         'sectors': [],
                         'name': user.get('username', f'User {user_id_participant}') if user else f'User {user_id_participant}',
-                        'avatar': (user.get('photo_url') if user else None) or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id_participant}.jpg'
+                        'avatar': None  # Будет получен позже через get_user_photo_url
                     }
                 
                 player_data[user_id_participant]['total_bet'] += bet_amount
                 sector_num = int(sector) if isinstance(sector, (str, int)) else sector
                 if sector_num not in player_data[user_id_participant]['sectors']:
                     player_data[user_id_participant]['sectors'].append(sector_num)
+        
+        # Получаем аватарки для всех игроков через Telegram Bot API
+        for user_id_participant, data in player_data.items():
+            # Получаем реальный аватар через Telegram Bot API
+            photo_url = await get_user_photo_url(user_id_participant)
+            if photo_url:
+                data['avatar'] = photo_url
+            else:
+                # Если не удалось получить аватар, пробуем из базы данных
+                user = await db.get_user(user_id_participant)
+                if user and user.get('photo_url'):
+                    data['avatar'] = user.get('photo_url')
         
         # Вычисляем шансы на победу для каждого игрока
         for user_id_participant, data in player_data.items():
@@ -1189,6 +1201,7 @@ async def handle_roulette_data(request: Request) -> Response:
                 'user_id': data['user_id'],
                 'name': data['name'],
                 'avatar': data['avatar'],
+                'photo_url': data['avatar'],  # Добавляем photo_url для совместимости
                 'total_bet': data['total_bet'],
                 'win_chance': round(win_chance, 1),
                 'sectors': data['sectors']
@@ -1199,7 +1212,11 @@ async def handle_roulette_data(request: Request) -> Response:
         if not current_user_in_list and user_bet > 0:
             # Если пользователь сделал ставку, но его нет в списке, добавляем его
             user = await db.get_user(user_id)
-            user_avatar = user_data.get('photo_url') or (user.get('photo_url') if user else None) or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id}.jpg'
+            # Получаем реальный аватар через Telegram Bot API
+            user_avatar = await get_user_photo_url(user_id_int)
+            if not user_avatar:
+                # Если не удалось получить через API, пробуем из user_data или базы данных
+                user_avatar = user_data.get('photo_url') or (user.get('photo_url') if user else None)
             user_name = user_data.get('first_name', '') + (' ' + user_data.get('last_name', '') if user_data.get('last_name') else '')
             if not user_name:
                 user_name = (user.get('username') if user else None) or f'User {user_id}'
@@ -1226,6 +1243,7 @@ async def handle_roulette_data(request: Request) -> Response:
                 'user_id': user_id_int,
                 'name': user_name,
                 'avatar': user_avatar,
+                'photo_url': user_avatar,  # Добавляем photo_url для совместимости
                 'total_bet': user_bet,
                 'win_chance': round(user_win_chance, 1),
                 'sectors': user_sectors
@@ -1242,22 +1260,28 @@ async def handle_roulette_data(request: Request) -> Response:
         participants_count = len(participants)
         min_players = 2
         
+        logger.info(f"⏱️ Счетчик: участников={participants_count}, min_players={min_players}, round_start_time={ROULETTE_STATE.get('round_start_time')}")
+        
         if participants_count >= min_players:
             # Если есть минимум 2 игрока, начинаем/продолжаем отсчет
             if not ROULETTE_STATE.get('round_start_time'):
                 ROULETTE_STATE['round_start_time'] = time.time()
-                countdown = 60
+                countdown = 15
+                logger.info(f"🚀 Начинаем новый раунд, устанавливаем round_start_time={ROULETTE_STATE['round_start_time']}, countdown={countdown}")
             else:
                 elapsed = int(time.time() - ROULETTE_STATE['round_start_time'])
-                countdown = max(0, 60 - elapsed)
+                countdown = max(0, 15 - elapsed)
+                logger.info(f"⏱️ Продолжаем отсчет: elapsed={elapsed}, countdown={countdown}")
                 # Если счетчик уже дошел до 0, но игра еще не завершена, оставляем 0
                 if countdown == 0 and not ROULETTE_STATE.get('round_finished', False):
                     countdown = 0
+                    logger.info("⏱️ Счетчик дошел до 0, но игра еще не завершена")
         else:
             # Если игроков меньше 2, не начинаем отсчет и сбрасываем таймер
-            countdown = 60
+            countdown = 15
             ROULETTE_STATE['round_start_time'] = None
             ROULETTE_STATE['round_finished'] = False
+            logger.info(f"⏸️ Недостаточно игроков ({participants_count} < {min_players}), сбрасываем таймер")
         
         # Находим сектор пользователя
         user_sector = None
@@ -1271,9 +1295,11 @@ async def handle_roulette_data(request: Request) -> Response:
             if user_sector is not None:
                 break
         
-        # Если не нашли, пробуем получить из user_data
+        # Если не нашли, пробуем получить из user_data или через Telegram Bot API
         if not user_avatar:
-            user_avatar = user_data.get('photo_url') or f'https://api.telegram.org/file/bot{BOT_TOKEN}/photos/{user_id}.jpg'
+            user_avatar = await get_user_photo_url(user_id_int)
+            if not user_avatar:
+                user_avatar = user_data.get('photo_url')
         
         return web.json_response({
             'participants': len(participants),
