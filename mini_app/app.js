@@ -4872,14 +4872,15 @@ function hideModal(modalId) {
 }
 
 // Показать toast уведомление
-function showToast(message) {
+function showToast(message, duration = 3000) {
     const toast = document.getElementById('toast');
-    toast.textContent = message;
+    // Поддерживаем многострочные сообщения
+    toast.innerHTML = message.replace(/\n/g, '<br>');
     toast.classList.add('show');
-    
+
     setTimeout(() => {
         toast.classList.remove('show');
-    }, 3000);
+    }, duration);
 }
 
 // Копировать реферальную ссылку
@@ -4906,6 +4907,8 @@ const rouletteState = {
     wheelCanvas: null,
     wheelCtx: null,
     isSpinning: false,
+    previousParticipants: 0, // Для отслеживания изменений количества участников
+    allUsersInBets: [], // Все уникальные пользователи в ставках для отображения аватарок
     topTab: 'games', // 'games' или 'users'
     countdownStarted: false, // Начался ли отсчет
     minPlayers: 2, // Минимум игроков для начала отсчета
@@ -4948,19 +4951,6 @@ function initRoulette() {
         });
     }
     
-    // Кнопка добавления к ставке - клонируем для удаления старых обработчиков
-    let addBetBtn = document.getElementById('btn-add-bet');
-    if (addBetBtn && addBetBtn.parentNode) {
-        const newAddBetBtn = addBetBtn.cloneNode(true);
-        addBetBtn.parentNode.replaceChild(newAddBetBtn, addBetBtn);
-        addBetBtn = newAddBetBtn;
-        addBetBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            addToBet();
-        });
-    }
-    
     // Поле ввода ставки - клонируем для удаления старых обработчиков
     let betInput = document.getElementById('roulette-bet-input');
     if (betInput && betInput.parentNode) {
@@ -4994,34 +4984,6 @@ function initRoulette() {
         });
     }
     
-    // Быстрые кнопки ставок - клонируем для удаления старых обработчиков
-    document.querySelectorAll('.bet-quick-btn-roulette').forEach(btn => {
-        if (btn.parentNode) {
-            const newBtn = btn.cloneNode(true);
-            btn.parentNode.replaceChild(newBtn, btn);
-            
-            newBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                // Убираем активность с других кнопок
-                document.querySelectorAll('.bet-quick-btn-roulette').forEach(b => b.classList.remove('active'));
-                newBtn.classList.add('active');
-                
-                const value = newBtn.dataset.value;
-                const input = document.getElementById('roulette-bet-input');
-                if (input) {
-                    if (value === 'base') {
-                        input.value = appState.baseBet.toFixed(2);
-                    } else {
-                        input.value = parseFloat(value).toFixed(2);
-                    }
-                    // Фокусируем поле ввода
-                    input.focus();
-                }
-            });
-        }
-    });
-    
     // Кнопка чат (если есть)
     const chatBtn = document.getElementById('btn-roulette-chat');
     if (chatBtn && chatBtn.parentNode) {
@@ -5042,7 +5004,19 @@ function resizeRouletteCanvas() {
     const wrapper = rouletteState.wheelCanvas.closest('.roulette-wheel-wrapper');
     if (!wrapper) return;
     
-    const size = Math.max(Math.min(wrapper.offsetWidth, wrapper.offsetHeight), 50); // Минимальный размер 50px
+    // Если wrapper скрыт, используем его computed style или родительский контейнер
+    let size = Math.max(Math.min(wrapper.offsetWidth, wrapper.offsetHeight), 50);
+    
+    // Если размеры не определены (элемент скрыт), используем размеры родителя или фиксированный размер
+    if (size <= 50 || wrapper.offsetWidth === 0 || wrapper.offsetHeight === 0) {
+        const container = wrapper.closest('.roulette-container');
+        if (container && container.offsetWidth > 0) {
+            size = Math.min(container.offsetWidth - 40, 400); // Учитываем padding
+        } else {
+            // Используем фиксированный размер по умолчанию
+            size = 300;
+        }
+    }
     
     // Улучшаем качество для Retina дисплеев
     const dpr = window.devicePixelRatio || 1;
@@ -5051,7 +5025,8 @@ function resizeRouletteCanvas() {
     rouletteState.wheelCanvas.style.width = size + 'px';
     rouletteState.wheelCanvas.style.height = size + 'px';
     
-    // Масштабируем контекст для Retina
+    // Сбрасываем трансформации и масштабируем контекст для Retina
+    rouletteState.wheelCtx.setTransform(1, 0, 0, 1, 0, 0);
     rouletteState.wheelCtx.scale(dpr, dpr);
     
     // Включаем сглаживание высокого качества
@@ -5099,47 +5074,92 @@ function drawRouletteWheel() {
     ctx.translate(-centerX, -centerY);
     
     // Вычисляем размеры секторов на основе процентов ставок
-    const sectorSizes = calculateSectorSizes();
+    // Теперь каждая ставка создает отдельный визуальный сектор
+    const { sizes: sectorSizes, bets: allBets } = calculateSectorSizes();
     
     // Проверяем, есть ли секторы для отрисовки
-    const hasSectors = sectorSizes.some(size => size > 0);
+    const hasSectors = sectorSizes && sectorSizes.length > 0 && sectorSizes.some(size => size > 0);
     
     console.log('🎯 Проверка секторов:', {
         hasSectors,
-        sectorSizes: sectorSizes.filter(s => s > 0),
-        bets: Object.keys(rouletteState.bets || {}),
+        betsCount: allBets ? allBets.length : 0,
         totalBets: rouletteState.totalBets
     });
     
-    // Цвета для секторов (разные цвета для разных игроков)
+    // Очень яркие и красивые цвета для секторов (минимум 35 цветов)
     const sectorColors = [
-        ['#7DD3FC', '#0EA5E9'], // Голубой
-        ['#FBBF24', '#F59E0B'], // Оранжевый
-        ['#F9A8D4', '#EC4899'], // Розовый
-        ['#A78BFA', '#8B5CF6'], // Фиолетовый
-        ['#34D399', '#10B981'], // Зеленый
-        ['#F87171', '#EF4444'], // Красный
-        ['#60A5FA', '#3B82F6'], // Синий
-        ['#FCD34D', '#FBBF24'], // Желтый
-        ['#A7F3D0', '#6EE7B7'], // Светло-зеленый
-        ['#C7D2FE', '#818CF8'], // Индиго
-        ['#FBCFE8', '#F472B6'], // Пинк
-        ['#BFDBFE', '#60A5FA']  // Светло-синий
+        ['#00d4ff', '#0099cc'], // Яркий голубой
+        ['#ff0066', '#cc0052'], // Яркий розово-красный
+        ['#00ff88', '#00cc6a'], // Яркий зеленый (неон)
+        ['#ffaa00', '#cc8800'], // Яркий оранжевый
+        ['#aa44ff', '#8833cc'], // Яркий фиолетовый
+        ['#ff3366', '#cc2952'], // Яркий красно-розовый
+        ['#00ffcc', '#00cc9f'], // Яркий бирюзовый
+        ['#88ff00', '#6acc00'], // Яркий лайм
+        ['#ff6600', '#cc5200'], // Яркий красно-оранжевый
+        ['#6600ff', '#5200cc'], // Яркий индиго
+        ['#00ffaa', '#00cc88'], // Яркий изумрудный
+        ['#44ff00', '#35cc00'], // Яркий лайм-зеленый
+        ['#ffdd00', '#ccb100'], // Яркий желтый
+        ['#ff44aa', '#cc3588'], // Яркий розовый
+        ['#ff0088', '#cc006d'], // Яркий фуксия
+        ['#00aaff', '#0088cc'], // Яркий небесно-голубой
+        ['#00ffff', '#00cccc'], // Яркий циан
+        ['#66ff00', '#52cc00'], // Яркий желто-зеленый
+        ['#ffbb00', '#cc9600'], // Яркий золотой
+        ['#ff5500', '#cc4400'], // Яркий оранжево-красный
+        ['#ff7788', '#cc5f6d'], // Яркий коралловый
+        ['#3399ff', '#297acc'], // Яркий синий
+        ['#bb44ff', '#9635cc'], // Яркий лавандовый
+        ['#ff2299', '#cc1b7a'], // Яркий розово-пурпурный
+        ['#22ff66', '#1bcc52'], // Яркий мятный
+        ['#44aaff', '#3588cc'], // Яркий небесный
+        ['#8844ff', '#6d35cc'], // Яркий фиолетово-синий
+        ['#ff66aa', '#cc5288'], // Яркий розово-красный 2
+        ['#ff1166', '#cc0e52'], // Яркий красно-розовый 2
+        ['#11ffaa', '#0ecc88'], // Яркий бирюзово-зеленый
+        ['#ffaa44', '#cc8835'], // Яркий персиковый
+        ['#aa66ff', '#8852cc'], // Яркий фиолетово-розовый
+        ['#ff3344', '#cc2935'], // Яркий красный
+        ['#33ffaa', '#29cc88'], // Яркий аквамарин
+        ['#ff8800', '#cc6d00']  // Яркий оранжево-желтый
     ];
     
-    // Рисуем только секторы со ставками
-    if (hasSectors) {
+    // Функция для получения цвета пользователя на основе его ID
+    // Для каждой ставки одного пользователя используем один цвет, но разные оттенки для разных ставок
+    function getUserColor(userId, betIndex = 0) {
+        if (!userId) return sectorColors[betIndex % sectorColors.length];
+        // Используем хеш user_id для стабильного выбора базового цвета
+        const hash = userId.toString().split('').reduce((acc, char) => {
+            return ((acc << 5) - acc) + char.charCodeAt(0);
+        }, 0);
+        const baseIndex = Math.abs(hash) % sectorColors.length;
+        // Для разных ставок одного пользователя используем разные индексы
+        const index = (baseIndex + betIndex) % sectorColors.length;
+        return sectorColors[index];
+    }
+    
+    // Предзагружаем аватары для всех ставок перед отрисовкой
+    if (hasSectors && allBets && allBets.length > 0) {
+        const avatarUrls = allBets
+            .map(bet => getUserAvatar(bet.user_id, bet.avatar || bet.photo_url))
+            .filter(url => url);
+        preloadAvatars(avatarUrls);
+    }
+    
+    // Рисуем секторы - каждая ставка создает отдельный визуальный сектор
+    if (hasSectors && allBets && allBets.length > 0) {
         let currentAngle = -Math.PI / 2;
-        let sectorColorIndex = 0;
         
-        console.log('🎨 Начинаем отрисовку секторов, sectorSizes:', sectorSizes);
+        console.log('🎨 Начинаем отрисовку секторов, количество ставок:', allBets.length);
         
-        for (let i = 0; i < rouletteState.sectors; i++) {
-            const sectorSize = sectorSizes[i];
+        // Рисуем каждый визуальный сектор отдельно - каждая ставка получает свой сектор
+        allBets.forEach((bet, index) => {
+            const sectorSize = sectorSizes[index];
             
-            // Пропускаем секторы без ставок (размер 0 или null)
+            // Пропускаем ставки с нулевым размером
             if (!sectorSize || sectorSize <= 0) {
-                continue;
+                return;
             }
             
             const sectorAngleSize = sectorSize * 2 * Math.PI;
@@ -5147,13 +5167,11 @@ function drawRouletteWheel() {
             const endAngle = currentAngle + sectorAngleSize;
             const midAngle = (startAngle + endAngle) / 2;
             
-            // Получаем ставки для сектора (поддерживаем разные форматы ключей)
-            const sectorBets = rouletteState.bets[i] || rouletteState.bets[i.toString()] || [];
-            console.log(`🎯 Сектор ${i}: размер=${sectorSize.toFixed(3)}, ставок=${sectorBets.length}`);
+            console.log(`🎯 Визуальный сектор ${index}: размер=${sectorSize.toFixed(3)}, user_id=${bet.user_id}`);
             
-            // Получаем цвет для сектора
-            const colors = sectorColors[sectorColorIndex % sectorColors.length];
-            sectorColorIndex++;
+            // Получаем цвет для этого пользователя (все ставки одного пользователя одного цвета)
+            const userId = bet.user_id || null;
+            const colors = getUserColor(userId, 0);
             
             // Рисуем сектор с улучшенным качеством
             ctx.beginPath();
@@ -5187,35 +5205,33 @@ function drawRouletteWheel() {
             ctx.lineWidth = 2;
             ctx.stroke();
             
-            // Аватары в секторах (рисуем только первый аватар в центре сектора)
-            if (sectorBets.length > 0 && sectorBets[0]) {
-                const avatarRadius = radius * 0.65; // Позиция ближе к краю
-                const avatarX = centerX + Math.cos(midAngle) * avatarRadius;
-                const avatarY = centerY + Math.sin(midAngle) * avatarRadius;
-                const avatarSize = Math.min(radius * 0.25, 40); // Размер аватара зависит от размера колеса
-                
-                const bet = sectorBets[0]; // Берем первого игрока в секторе
-                
-                // Рисуем аватар
-                if (bet.avatar) {
-                    const img = new Image();
-                    img.crossOrigin = 'anonymous';
-                    img.onload = () => {
-                        // Рисуем круглый аватар без обводки и эффектов
+            // Аватары в секторах - показываем все аватарки всех пользователей
+            // Для этого сектора получаем аватар этого пользователя
+            const avatarRadius = radius * 0.65; // Позиция ближе к краю
+            const avatarSize = Math.min(radius * 0.20, 32); // Размер аватара немного меньше
+            
+            // Располагаем аватар в центре сектора
+            const avatarX = centerX + Math.cos(midAngle) * avatarRadius;
+            const avatarY = centerY + Math.sin(midAngle) * avatarRadius;
+            
+            // Получаем аватар используя функцию getUserAvatar
+            const avatarUrl = getUserAvatar(bet.user_id, bet.avatar || bet.photo_url);
+            
+            // Рисуем аватар если он есть
+            if (avatarUrl) {
+                // Проверяем кеш аватарок
+                if (avatarCache && avatarCache.has(avatarUrl)) {
+                    // Аватар уже загружен - рисуем синхронно
+                    const cachedImg = avatarCache.get(avatarUrl);
+                    if (cachedImg && cachedImg.complete && cachedImg.naturalWidth > 0) {
                         ctx.save();
                         ctx.beginPath();
                         ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
                         ctx.clip();
-                        ctx.drawImage(img, avatarX - avatarSize / 2, avatarY - avatarSize / 2, avatarSize, avatarSize);
+                        ctx.drawImage(cachedImg, avatarX - avatarSize / 2, avatarY - avatarSize / 2, avatarSize, avatarSize);
                         ctx.restore();
-                        
-                        // Перерисовываем после загрузки только если не идет вращение
-                        if (!rouletteState.isSpinning) {
-                            drawRouletteWheel();
-                        }
-                    };
-                    img.onerror = () => {
-                        // Если аватар не загрузился, рисуем простой круг
+                    } else {
+                        // Аватар в кеше, но еще не загружен - рисуем placeholder
                         ctx.save();
                         ctx.beginPath();
                         ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
@@ -5227,13 +5243,56 @@ function drawRouletteWheel() {
                         ctx.textBaseline = 'middle';
                         ctx.fillText('?', avatarX, avatarY);
                         ctx.restore();
+                    }
+                } else {
+                    // Аватара нет в кеше - начинаем загрузку и рисуем placeholder
+                    const img = new Image();
+                    img.crossOrigin = 'anonymous';
+                    img.onload = () => {
+                        // Сохраняем в кеш
+                        if (avatarCache) {
+                            avatarCache.set(avatarUrl, img);
+                        }
+                        // Перерисовываем после загрузки только если не идет вращение
+                        if (!rouletteState.isSpinning) {
+                            drawRouletteWheel();
+                        }
                     };
-                    img.src = bet.avatar;
+                    img.onerror = () => {
+                        // Если аватар не загрузился, оставляем placeholder
+                    };
+                    img.src = avatarUrl;
+                    
+                    // Рисуем placeholder пока аватар загружается
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#555555';
+                    ctx.fill();
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = `bold ${avatarSize / 3}px Arial`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('?', avatarX, avatarY);
+                    ctx.restore();
                 }
+            } else {
+                // Если аватара нет, рисуем placeholder
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(avatarX, avatarY, avatarSize / 2, 0, 2 * Math.PI);
+                ctx.fillStyle = '#555555';
+                ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.font = `bold ${avatarSize / 3}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('?', avatarX, avatarY);
+                ctx.restore();
             }
             
             currentAngle = endAngle;
-        }
+        });
     }
     
     // Восстанавливаем контекст
@@ -5256,66 +5315,126 @@ function drawRouletteWheel() {
     }
 }
 
-// Вычисление размеров секторов на основе процентов ставок
+// Вычисление размеров секторов для визуализации (группировка ставок по пользователям)
+// Возвращает { sizes: [], bets: [] } где каждый элемент - группа ставок одного пользователя
 function calculateSectorSizes() {
-    const sizes = new Array(rouletteState.sectors).fill(0);
-    
-    // Вычисляем процент каждой ставки по секторам
-    const sectorTotals = {};
-    let totalWithBets = 0;
-    
-    // Проверяем формат данных ставок
-    // Может быть объект {sector: [bets]} или массив
+    // Собираем все ставки из всех секторов
     const bets = rouletteState.bets || {};
+    let totalWithBets = 0;
     
     console.log('🔍 Вычисление размеров секторов, bets:', bets);
     
-    // Проверяем все возможные ключи в bets (могут быть строки или числа)
-    const allSectors = new Set();
+    // Группируем ставки по user_id
+    const betsByUser = {}; // { user_id: { totalBet: number, user_id: string, avatar: string, photo_url: string } }
+    
+    // Проходим по всем секторам и собираем все ставки, группируя по пользователям
     for (const key in bets) {
         const sectorNum = parseInt(key);
         if (!isNaN(sectorNum) && sectorNum >= 0 && sectorNum < rouletteState.sectors) {
-            allSectors.add(sectorNum);
+            const sectorBets = bets[sectorNum] || bets[sectorNum.toString()] || [];
+            
+            if (Array.isArray(sectorBets)) {
+                sectorBets.forEach(bet => {
+                    const betObj = typeof bet === 'number' 
+                        ? { bet: bet, user_id: null, avatar: null, photo_url: null }
+                        : bet;
+                    const betAmount = betObj.bet || betObj.amount || 0;
+                    const userId = betObj.user_id || 'unknown';
+                    
+                    if (betAmount > 0) {
+                        // Если для этого пользователя еще нет записи, создаем
+                        if (!betsByUser[userId]) {
+                            betsByUser[userId] = {
+                                user_id: userId,
+                                bet: 0,
+                                avatar: betObj.avatar || betObj.photo_url || null,
+                                photo_url: betObj.photo_url || betObj.avatar || null,
+                                username: betObj.username || null
+                            };
+                        }
+                        
+                        // Суммируем ставки этого пользователя
+                        betsByUser[userId].bet += betAmount;
+                        totalWithBets += betAmount;
+                        
+                        // Обновляем аватар если он еще не был установлен
+                        if (!betsByUser[userId].avatar && !betsByUser[userId].photo_url) {
+                            betsByUser[userId].avatar = betObj.avatar || betObj.photo_url || null;
+                            betsByUser[userId].photo_url = betObj.photo_url || betObj.avatar || null;
+                        }
+                    }
+                });
+            }
         }
     }
     
-    for (const sector of allSectors) {
-        // Поддерживаем разные форматы: bets[sector] или bets[sector.toString()]
-        const sectorBets = bets[sector] || bets[sector.toString()] || [];
-        let sectorTotal = 0;
-        
-        if (Array.isArray(sectorBets)) {
-            sectorBets.forEach(bet => {
-                const betAmount = typeof bet === 'number' ? bet : (bet.bet || bet.amount || 0);
-                sectorTotal += betAmount;
-            });
-        } else if (typeof sectorBets === 'number') {
-            sectorTotal = sectorBets;
-        }
-        
-        if (sectorTotal > 0) {
-            sectorTotals[sector] = sectorTotal;
-            totalWithBets += sectorTotal;
-        }
-    }
+    // Преобразуем объект в массив
+    const allBets = Object.values(betsByUser);
     
-    console.log('📊 Итого ставок по секторам:', sectorTotals, 'Общая сумма:', totalWithBets);
+    console.log('📊 Всего уникальных пользователей:', allBets.length, 'Общая сумма:', totalWithBets);
     
-    // Если нет ставок, не отрисовываем секторы (возвращаем все нули)
-    if (totalWithBets === 0) {
+    // Если нет ставок, возвращаем пустой массив
+    if (totalWithBets === 0 || allBets.length === 0) {
         console.log('⚠️ Нет ставок для отрисовки секторов');
-        return sizes; // Все нули - секторы не будут отрисованы
+        return { sizes: [], bets: [] };
     }
     
-    // Распределяем пропорционально - только для секторов со ставками
+    // Вычисляем размер каждого визуального сектора на основе суммарной ставки пользователя
+    const sizes = allBets.map(userBet => userBet.bet / totalWithBets);
+    
+    console.log('📐 Размеры визуальных секторов (по пользователям):', sizes.length);
+    
+    // Сохраняем список ставок по пользователям для использования в drawRouletteWheel
+    rouletteState.allBetsFlat = allBets;
+    
+    // Сохраняем всех уникальных пользователей для отображения всех аватарок
+    rouletteState.allUsersInBets = allBets;
+    
+    return { sizes, bets: allBets };
+}
+
+// Вычисление размеров секторов для логики вращения (группировка по секторам рулетки)
+// Используется в getSectorAtAngle и spinWheel
+function calculateSectorSizesForSpin() {
+    const sizes = new Array(rouletteState.sectors).fill(0);
+    const sectorTotals = {};
+    let totalWithBets = 0;
+    const bets = rouletteState.bets || {};
+    
+    // Группируем ставки по секторам рулетки (старая логика)
+    for (const key in bets) {
+        const sectorNum = parseInt(key);
+        if (!isNaN(sectorNum) && sectorNum >= 0 && sectorNum < rouletteState.sectors) {
+            const sectorBets = bets[sectorNum] || bets[sectorNum.toString()] || [];
+            let sectorTotal = 0;
+            
+            if (Array.isArray(sectorBets)) {
+                sectorBets.forEach(bet => {
+                    const betAmount = typeof bet === 'number' ? bet : (bet.bet || bet.amount || 0);
+                    sectorTotal += betAmount;
+                });
+            } else if (typeof sectorBets === 'number') {
+                sectorTotal = sectorBets;
+            }
+            
+            if (sectorTotal > 0) {
+                sectorTotals[sectorNum] = sectorTotal;
+                totalWithBets += sectorTotal;
+            }
+        }
+    }
+    
+    if (totalWithBets === 0) {
+        return sizes;
+    }
+    
+    // Распределяем пропорционально
     for (let i = 0; i < rouletteState.sectors; i++) {
         if (sectorTotals[i] && sectorTotals[i] > 0) {
             sizes[i] = sectorTotals[i] / totalWithBets;
         }
-        // Секторы без ставок остаются 0 - они не будут отрисованы
     }
     
-    console.log('📐 Размеры секторов:', sizes);
     return sizes;
 }
 
@@ -5339,6 +5458,15 @@ async function loadRouletteData() {
             
             // Обновляем статистику
             const participants = data.participants || 0;
+            const previousParticipants = rouletteState.previousParticipants || 0;
+            
+            // Если количество участников изменилось, это означает что кто-то добавился
+            if (participants !== previousParticipants && previousParticipants > 0) {
+                console.log('🔄 Обнаружено изменение количества участников:', previousParticipants, '->', participants);
+                // Обновление произойдет автоматически через перерисовку колеса
+            }
+            rouletteState.previousParticipants = participants;
+            
             document.getElementById('roulette-participants').textContent = participants;
             document.getElementById('roulette-total-bets').textContent = `$${(data.total_bets || 0).toFixed(2)}`;
             document.getElementById('roulette-user-bet').textContent = `$${(data.user_bet || 0).toFixed(2)}`;
@@ -5373,7 +5501,9 @@ async function loadRouletteData() {
             
             // Обновляем игроков
             console.log('👥 Получены игроки:', data.players);
-            updateRoulettePlayers(data.players || []);
+            // Убеждаемся что players это массив
+            const playersList = Array.isArray(data.players) ? data.players : (data.players ? [data.players] : []);
+            updateRoulettePlayers(playersList);
             
             // Аватар больше не показываем в центре
             
@@ -5388,17 +5518,22 @@ async function loadRouletteData() {
             // Начинаем отсчет только если есть минимум 2 игрока
             if (participants >= rouletteState.minPlayers) {
                 console.log('✅ Участников достаточно для запуска счетчика:', participants, 'countdown:', rouletteState.countdown);
-                // Если счетчик уже запущен, синхронизируем значение с сервером
+                // Синхронизируем значение счетчика с сервером
+                if (data.countdown !== undefined && data.countdown !== null) {
+                    rouletteState.countdown = data.countdown;
+                }
+                
+                // Если счетчик уже запущен, просто обновляем значение
                 if (rouletteState.countdownInterval) {
-                    // Обновляем значение счетчика с сервера для синхронизации
-                    if (data.countdown !== undefined && data.countdown !== null) {
-                        rouletteState.countdown = data.countdown;
-                    }
                     updateCountdown();
                 } else {
                     // Запускаем счетчик только если он еще не запущен
-                    console.log('🚀 Запускаем счетчик');
+                    console.log('🚀 Запускаем счетчик, countdown:', rouletteState.countdown);
                     rouletteState.countdownStarted = true;
+                    // Убеждаемся что счетчик инициализирован перед запуском
+                    if (rouletteState.countdown === undefined || rouletteState.countdown === null) {
+                        rouletteState.countdown = 60;
+                    }
                     startCountdown();
                 }
             } else {
@@ -5417,14 +5552,45 @@ async function loadRouletteData() {
                 }
             }
             
-            // Перерисовываем колесо с задержкой для гарантии что данные обновились
+            // Перерисовываем колесо сразу и с задержкой для гарантии что данные обновились
+            drawRouletteWheel();
             setTimeout(() => {
                 drawRouletteWheel();
             }, 100);
+            // Также перерисовываем после небольшой задержки для надежности
+            setTimeout(() => {
+                drawRouletteWheel();
+            }, 300);
+            
+            // Если количество участников изменилось, запускаем автообновление для всех
+            if (participants !== previousParticipants && previousParticipants > 0) {
+                console.log('🔄 Автообновление при изменении участников');
+                // Обновление уже произошло через loadRouletteData, просто перерисовываем
+                drawRouletteWheel();
+            }
         }
     } catch (error) {
         console.error('Ошибка загрузки данных рулетки:', error);
     }
+}
+
+// Кеш для аватарок чтобы они не мигали при обновлении
+const avatarCache = new Map();
+
+// Предзагрузка аватарок
+function preloadAvatars(avatarUrls) {
+    avatarUrls.forEach(url => {
+        if (url && !avatarCache.has(url)) {
+            const img = new Image();
+            img.onload = () => {
+                avatarCache.set(url, img);
+            };
+            img.onerror = () => {
+                // Не кешируем ошибки
+            };
+            img.src = url;
+        }
+    });
 }
 
 // Обновление списка игроков
@@ -5437,106 +5603,239 @@ function updateRoulettePlayers(players) {
     
     console.log('📋 Обновление списка игроков, количество:', players?.length || 0);
     
-    container.innerHTML = '';
-    
     if (!players || players.length === 0) {
         console.log('⚠️ Нет игроков для отображения');
+        // Показываем сообщение "Нет игроков" вместо пустого контейнера
+        container.innerHTML = '<div style="text-align: center; padding: 20px; color: rgba(255, 255, 255, 0.5); font-size: 14px;">Нет игроков</div>';
         return;
     }
     
+    // Получаем все URL аватарок для предзагрузки
+    const avatarUrls = players
+        .map(player => {
+            const avatarUrl = getUserAvatar(player.user_id, player.avatar || player.photo_url);
+            return avatarUrl;
+        })
+        .filter(url => url);
+    
+    // Предзагружаем аватары перед обновлением DOM
+    preloadAvatars(avatarUrls);
+    
+    // Сохраняем существующие элементы игроков для плавного обновления
+    const existingPlayers = new Map();
+    container.querySelectorAll('.roulette-player-item').forEach(item => {
+        const playerId = item.dataset.playerId;
+        if (playerId) {
+            existingPlayers.set(playerId, item);
+        }
+    });
+    
+    // Создаем новый фрагмент для обновления
+    const fragment = document.createDocumentFragment();
+    const newPlayerIds = new Set();
+    
+    // Нормализуем проценты шансов, чтобы сумма была максимум 100%
+    let totalChance = 0;
+    const normalizedPlayers = players.map(player => {
+        const chance = Math.min(Math.max(player.win_chance || 0, 0), 100); // Ограничиваем каждый процент 0-100%
+        totalChance += chance;
+        return { ...player, win_chance: chance };
+    });
+    
+    // Если сумма процентов больше 100, нормализуем пропорционально
+    if (totalChance > 100 && totalChance > 0) {
+        normalizedPlayers.forEach(player => {
+            player.win_chance = (player.win_chance / totalChance) * 100;
+        });
+    }
+    
     // Создаем список игроков с полной информацией
-    players.forEach((player, index) => {
-        const playerItem = document.createElement('div');
-        playerItem.className = 'roulette-player-item';
-        playerItem.style.cssText = `
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 10px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            margin-bottom: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        `;
+    normalizedPlayers.forEach((player, index) => {
+        const playerId = player.user_id?.toString() || index.toString();
+        newPlayerIds.add(playerId);
+        
+        // Проверяем, существует ли уже элемент для этого игрока
+        let playerItem = existingPlayers.get(playerId);
+        const isNewPlayer = !playerItem;
+        
+        if (!playerItem) {
+            playerItem = document.createElement('div');
+            playerItem.className = 'roulette-player-item';
+            playerItem.dataset.playerId = playerId;
+            playerItem.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 10px;
+                background: rgba(255, 255, 255, 0.05);
+                border-radius: 12px;
+                margin-bottom: 8px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+            `;
+        }
+        
+        // Получаем аватар используя функцию getUserAvatar
+        const avatarUrl = getUserAvatar(player.user_id, player.avatar || player.photo_url);
         
         // Аватар
-        const avatarWrapper = document.createElement('div');
-        avatarWrapper.style.cssText = `
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            overflow: hidden;
-            flex-shrink: 0;
-            background: linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,200,255,0.2));
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        `;
-        
-        const avatar = document.createElement('img');
-        avatar.style.cssText = 'width: 100%; height: 100%; object-fit: cover;';
-        avatar.src = player.avatar || 'https://via.placeholder.com/40';
-        avatar.alt = player.name || 'Player';
-        avatar.onerror = () => {
-            avatar.style.display = 'none';
-            const fallback = document.createElement('div');
-            fallback.style.cssText = `
-                width: 100%;
-                height: 100%;
+        let avatarWrapper = playerItem.querySelector('.avatar-wrapper');
+        if (!avatarWrapper) {
+            avatarWrapper = document.createElement('div');
+            avatarWrapper.className = 'avatar-wrapper';
+            avatarWrapper.style.cssText = `
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                overflow: hidden;
+                flex-shrink: 0;
+                background: linear-gradient(135deg, rgba(0,255,136,0.2), rgba(0,200,255,0.2));
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                color: rgba(255, 255, 255, 0.6);
-                font-size: 18px;
             `;
-            fallback.textContent = '?';
-            avatarWrapper.appendChild(fallback);
-        };
-        avatarWrapper.appendChild(avatar);
+            playerItem.insertBefore(avatarWrapper, playerItem.firstChild);
+        }
+        
+        // Обновляем аватар только если URL изменился или это новый игрок
+        const existingAvatar = avatarWrapper.querySelector('img');
+        const existingFallback = avatarWrapper.querySelector('div:not(.avatar-wrapper)');
+        
+        if (avatarUrl) {
+            if (!existingAvatar || existingAvatar.src !== avatarUrl || existingAvatar.src === '') {
+                // Очищаем старый аватар и fallback
+                avatarWrapper.innerHTML = '';
+                
+                const avatar = document.createElement('img');
+                avatar.style.cssText = 'width: 100%; height: 100%; object-fit: cover;';
+                avatar.alt = player.name || 'Player';
+                
+                // Устанавливаем src сразу - браузер сам загрузит
+                avatar.src = avatarUrl;
+                
+                // Обработка успешной загрузки
+                avatar.onload = () => {
+                    // Аватар загружен успешно
+                    avatarCache.set(avatarUrl, avatar);
+                };
+                
+                // Обработка ошибки загрузки
+                avatar.onerror = () => {
+                    // Показываем placeholder при ошибке
+                    avatar.style.display = 'none';
+                    const fallback = document.createElement('div');
+                    fallback.style.cssText = `
+                        width: 100%;
+                        height: 100%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: rgba(255, 255, 255, 0.6);
+                        font-size: 18px;
+                    `;
+                    fallback.textContent = '?';
+                    avatarWrapper.appendChild(fallback);
+                };
+                
+                // Добавляем аватар в контейнер сразу
+                avatarWrapper.appendChild(avatar);
+                
+                // Если аватар уже в кеше, он загрузится мгновенно
+                if (avatarCache.has(avatarUrl)) {
+                    const cachedImg = avatarCache.get(avatarUrl);
+                    if (cachedImg.complete) {
+                        avatar.src = cachedImg.src;
+                    }
+                }
+            }
+        } else {
+            // Нет аватара - показываем placeholder
+            if (!existingFallback) {
+                avatarWrapper.innerHTML = '';
+                const fallback = document.createElement('div');
+                fallback.style.cssText = `
+                    width: 100%;
+                    height: 100%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: rgba(255, 255, 255, 0.6);
+                    font-size: 18px;
+                `;
+                fallback.textContent = '?';
+                avatarWrapper.appendChild(fallback);
+            }
+        }
         
         // Информация об игроке
-        const info = document.createElement('div');
-        info.style.cssText = 'flex: 1; min-width: 0;';
+        let info = playerItem.querySelector('.player-info');
+        if (!info) {
+            info = document.createElement('div');
+            info.className = 'player-info';
+            info.style.cssText = 'flex: 1; min-width: 0;';
+            playerItem.appendChild(info);
+        }
         
-        const name = document.createElement('div');
-        name.style.cssText = `
-            font-size: 14px;
-            font-weight: 600;
-            color: #ffffff;
-            margin-bottom: 4px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        `;
-        name.textContent = player.name || `User ${player.user_id}`;
+        // Обновляем имя
+        let name = info.querySelector('.player-name');
+        if (!name) {
+            name = document.createElement('div');
+            name.className = 'player-name';
+            name.style.cssText = `
+                font-size: 14px;
+                font-weight: 600;
+                color: #ffffff;
+                margin-bottom: 4px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            `;
+            info.appendChild(name);
+        }
+        name.textContent = player.name || player.username || `User ${player.user_id}`;
         
-        const stats = document.createElement('div');
-        stats.style.cssText = `
-            display: flex;
-            gap: 12px;
-            font-size: 12px;
-            color: rgba(255, 255, 255, 0.7);
-        `;
+        // Обновляем статистику
+        let stats = info.querySelector('.player-stats');
+        if (!stats) {
+            stats = document.createElement('div');
+            stats.className = 'player-stats';
+            stats.style.cssText = `
+                display: flex;
+                gap: 12px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.7);
+            `;
+            info.appendChild(stats);
+        }
+        
+        // Обновляем содержимое статистики
+        stats.innerHTML = '';
         
         const betAmount = document.createElement('span');
         betAmount.style.cssText = 'color: #00ff88;';
-        betAmount.textContent = `$${(player.total_bet || 0).toFixed(2)}`;
+        betAmount.textContent = `$${(player.total_bet || player.bet || 0).toFixed(2)}`;
         
         const winChance = document.createElement('span');
         winChance.style.cssText = 'color: #7DD3FC;';
-        winChance.textContent = `${player.win_chance || 0}% шанс`;
+        winChance.textContent = `${(player.win_chance || 0).toFixed(0)}% шанс`;
         
         stats.appendChild(betAmount);
         stats.appendChild(winChance);
         
-        info.appendChild(name);
-        info.appendChild(stats);
-        
-        playerItem.appendChild(avatarWrapper);
-        playerItem.appendChild(info);
-        
-        container.appendChild(playerItem);
+        // Добавляем элемент в фрагмент если это новый игрок
+        if (isNewPlayer) {
+            fragment.appendChild(playerItem);
+        }
     });
+    
+    // Удаляем игроков, которых больше нет
+    existingPlayers.forEach((item, playerId) => {
+        if (!newPlayerIds.has(playerId)) {
+            item.remove();
+        }
+    });
+    
+    // Добавляем новых игроков
+    container.appendChild(fragment);
 }
 
 // Обновление счетчика
@@ -5546,9 +5845,14 @@ function updateCountdown() {
         countdownEl.textContent = rouletteState.countdown;
         countdownEl.style.fontSize = '42px'; // Возвращаем нормальный размер
         
-        // Плавная анимация без ярких цветов
+        // Плавная анимация с более светлым цветом
         countdownEl.style.animation = 'countdownPulse 2s ease-in-out infinite';
-        countdownEl.style.color = '#888888'; // Серый цвет
+        // Более светлый цвет для счетчика
+        if (rouletteState.countdown <= 10) {
+            countdownEl.style.color = '#ffaa00'; // Оранжевый когда мало времени
+        } else {
+            countdownEl.style.color = '#bbbbbb'; // Светло-серый
+        }
     }
 }
 
@@ -5616,8 +5920,8 @@ function calculateWinningSectorFromRotation() {
         normalizedAngle += 2 * Math.PI;
     }
     
-    // Вычисляем размеры секторов
-    const sectorSizes = calculateSectorSizes();
+    // Вычисляем размеры секторов (для логики вращения используем группировку по секторам рулетки)
+    const sectorSizes = calculateSectorSizesForSpin();
     
     // Находим, в какой сектор попадает этот угол
     let currentAngle = 0; // В нормализованных координатах начинаем с 0
@@ -5668,8 +5972,8 @@ async function spinWheel() {
         }
     }
     
-    // Вычисляем размеры секторов
-    const sectorSizes = calculateSectorSizes();
+    // Вычисляем размеры секторов (для логики вращения используем группировку по секторам рулетки)
+    const sectorSizes = calculateSectorSizesForSpin();
     
     // Выбираем случайный выигрышный сектор (из тех, где есть ставки)
     const sectorsWithBets = [];
@@ -5709,20 +6013,33 @@ async function spinWheel() {
     // Вычисляем финальный угол поворота так, чтобы центр выбранного сектора оказался под указателем (вверху)
     // Указатель находится вверху (-90° или -Math.PI/2)
     // Чтобы центр сектора оказался вверху, нужно повернуть на противоположный угол
-    const totalRotations = 5 + Math.random() * 2; // 5-7 полных оборотов для эффекта
+    const totalRotations = 1.5 + Math.random() * 1; // 1.5-2.5 полных оборотов для плавного вращения
     const finalRotationRad = -winningSectorCenterAngle + (totalRotations * 2 * Math.PI);
     const finalAngle = finalRotationRad * (180 / Math.PI); // Конвертируем в градусы
     
     const startTime = Date.now();
     const startRotation = rouletteState.currentRotation;
     
-    // Продолжительность вращения
-    const spinDuration = 3000 + Math.random() * 1000; // 3-4 секунды
+    // Продолжительность вращения - 10 секунд (увеличено для более медленной прокрутки)
+    const spinDuration = 10000; // 10 секунд
     
-    // Плавная easing функция без резких движений
+    // Плавная easing функция с очень плавным замедлением перед остановкой
     function smoothEase(t) {
-        // Плавное замедление без пружинных эффектов
-        return 1 - Math.pow(1 - t, 3);
+        // Большую часть пути проходим быстро, затем очень плавно замедляемся
+        if (t < 0.3) {
+            // Первые 30% времени - быстрое вращение (70% пути)
+            return (t / 0.3) * 0.7;
+        } else if (t < 0.7) {
+            // Следующие 40% времени - постепенное замедление (25% пути)
+            const localT = (t - 0.3) / 0.4;
+            // Используем ease-out-cubic для плавного замедления
+            return 0.7 + (1 - Math.pow(1 - localT, 3)) * 0.25;
+        } else {
+            // Последние 30% времени - очень медленное плавное замедление (5% пути)
+            const localT = (t - 0.7) / 0.3;
+            // Используем ease-out-quint для очень плавного замедления перед остановкой
+            return 0.95 + (1 - Math.pow(1 - localT, 5)) * 0.05;
+        }
     }
     
     function animate() {
@@ -5793,10 +6110,21 @@ async function finishRound(winningSector) {
             const countdownEl = document.getElementById('roulette-countdown');
             if (countdownEl) {
                 if (data.winner) {
-                    countdownEl.textContent = `Победитель: ${data.winner.username || 'Игрок'}!`;
-                    showToast(`🎉 Выигрыш: $${data.win_amount?.toFixed(2) || '0.00'}`);
+                    const winner = data.winner;
+                    const winAmount = data.win_amount || 0;
+                    const tonAmount = appState.tonRate > 0 ? (winAmount / appState.tonRate).toFixed(4) : '0.0000';
+                    const winChance = winner.win_chance || 0;
+                    
+                    countdownEl.textContent = `🎉 ${winner.username || 'Игрок'}`;
+                    countdownEl.style.fontSize = '32px';
+                    countdownEl.style.color = '#00ff88';
+                    
+                    // Показываем детальное сообщение о победе
+                    showToast(`🏆 Победитель: ${winner.username || 'Игрок'}\n💰 Выигрыш: $${winAmount.toFixed(2)} (${tonAmount} TON)\n🎯 Шанс: ${winChance.toFixed(1)}%`, 5000);
                 } else {
                     countdownEl.textContent = 'Раунд завершен';
+                    countdownEl.style.fontSize = '42px';
+                    countdownEl.style.color = '#888888';
                 }
             }
             
@@ -5890,6 +6218,8 @@ async function placeRouletteBet() {
     
     try {
         console.log('Отправка ставки:', bet);
+        
+        // Отправляем запрос и ждем ответа
         const response = await fetch(`${API_BASE}/roulette/bet`, {
             method: 'POST',
             headers: {
@@ -5904,12 +6234,23 @@ async function placeRouletteBet() {
         if (response.ok) {
             const data = await response.json();
             console.log('Данные ответа:', data);
+            
+            // Показываем сообщение только после успешного ответа
             showToast('Ставка размещена!');
             
-            // Аватар больше не показываем в центре
+            // Обновляем данные после успешного размещения ставки
+            await Promise.all([
+                loadUserData(),
+                loadRouletteData()
+            ]);
             
-            await loadUserData(); // Обновляем баланс
-            await loadRouletteData(); // Обновляем данные рулетки
+            // Перерисовываем колесо после обновления данных
+            setTimeout(() => {
+                drawRouletteWheel();
+            }, 100);
+            setTimeout(() => {
+                drawRouletteWheel();
+            }, 300);
         } else {
             const errorData = await response.json().catch(() => ({}));
             console.error('Ошибка ответа:', errorData);
@@ -5919,7 +6260,7 @@ async function placeRouletteBet() {
         console.error('Ошибка размещения ставки:', error);
         showToast('Ошибка размещения ставки: ' + error.message);
     } finally {
-        // Разблокируем кнопку
+        // Разблокируем кнопку в любом случае
         if (betBtn) {
             betBtn.disabled = false;
             betBtn.textContent = 'Поставить';
@@ -6011,7 +6352,6 @@ async function openRoulettePage() {
             if (canvas) {
                 rouletteState.wheelCanvas = canvas;
                 rouletteState.wheelCtx = canvas.getContext('2d');
-                resizeRouletteCanvas();
             }
         }
 
@@ -6020,7 +6360,7 @@ async function openRoulettePage() {
         
         // Аватар больше не показываем в центре
         
-        // Запускаем автообновление
+        // Запускаем автообновление при изменении количества участников
         startRouletteAutoRefresh();
         
         // Счетчик запустится автоматически при загрузке данных если есть 2+ игрока
@@ -6030,6 +6370,23 @@ async function openRoulettePage() {
     } finally {
         if (loadingEl) loadingEl.classList.add('hidden');
         if (contentEl) contentEl.style.display = 'block';
+        
+        // Перерисовываем колесо после показа контента, чтобы оно было видно
+        // Используем requestAnimationFrame для гарантии что DOM обновлен
+        requestAnimationFrame(() => {
+            resizeRouletteCanvas();
+            drawRouletteWheel();
+            
+            // Дополнительные попытки для надежности
+            setTimeout(() => {
+                resizeRouletteCanvas();
+                drawRouletteWheel();
+            }, 100);
+            setTimeout(() => {
+                resizeRouletteCanvas();
+                drawRouletteWheel();
+            }, 300);
+        });
     }
 }
 
@@ -6046,15 +6403,21 @@ function closeRoulettePage() {
     }
 }
 
-// Автообновление каждые 0.5 секунд
+// Автообновление при изменении количества участников
+// Проверяем данные каждые 2 секунды для обновления при добавлении новых пользователей
 function startRouletteAutoRefresh() {
     if (rouletteState.refreshInterval) {
         clearInterval(rouletteState.refreshInterval);
     }
     
+    // Проверяем данные каждые 2 секунды
+    // Это позволит обновлять данные для всех пользователей при добавлении нового участника
     rouletteState.refreshInterval = setInterval(() => {
-        loadRouletteData();
-    }, 500);
+        // Обновляем только если не идет вращение
+        if (!rouletteState.isSpinning) {
+            loadRouletteData();
+        }
+    }, 2000); // 2 секунды - баланс между отзывчивостью и нагрузкой
 }
 
 
